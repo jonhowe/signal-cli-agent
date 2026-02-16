@@ -1,7 +1,7 @@
 [Unit]
-Description=Signal CLI YAML rule agent
+Description=Signal CLI Agent (rules engine)
 After=signal-cli-dbus.service
-Requires=signal-cli-dbus.service
+Wants=signal-cli-dbus.service
 
 [Service]
 Type=simple
@@ -9,9 +9,12 @@ WorkingDirectory=@REPO@
 ExecStart=@PYTHON@ @AGENT_SCRIPT@ @RULES_YAML@
 Restart=on-failure
 RestartSec=3
-Environment=PYTHONUNBUFFERED=1
 
-# Optional hardening
+# Helps avoid "TERM" killing issues (GLib main loop)
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+# Optional hardening (safe defaults)
 NoNewPrivileges=true
 PrivateTmp=true
 

@@ -1,0 +1,98 @@
+rules:
+  # ----------------------------
+  # 1) Home directory listing
+  # ----------------------------
+  - name: home_dir_list
+    sender:
+      - "@PHONE@"
+    trigger: "home directory?"
+    match: exact
+
+    # Use argv list form (recommended)
+    command: ["ls", "-lah", "/home/@USER@"]
+
+    # Safety controls
+    cooldown_sec: 5
+    max_runs_per_hour: 60
+    timeout_sec: 5
+
+    # Chunking: helps for long directory listings
+    split_reply: true
+    chunk_size: 1400
+    numbered_chunks: true
+
+    # Default reply_mode is "full" (shows exit + command + output)
+
+  # ------------------------------------------
+  # 2) Tail journal entries (regex + validation)
+  # ------------------------------------------
+  - name: journal_tail
+    sender:
+      - "@PHONE@"
+    match: regex
+    trigger: "^tail journal (\\d+)$"
+
+    # Template + args validation (prevents abuse like "999999")
+    command_template: ["journalctl", "-n", "{n}", "--no-pager"]
+    args:
+      n:
+        type: int
+        min: 1
+        max: 200
+
+    timeout_sec: 8
+
+    # journal output can be long
+    split_reply: true
+    chunk_size: 1400
+    numbered_chunks: true
+
+    # Often you only care about output; uncomment if preferred:
+    # reply_mode: output
+
+  # ----------------------------
+  # 3) Disk usage (reply routed)
+  # ----------------------------
+  - name: disk_usage
+    sender:
+      - "@PHONE@"
+    trigger: "disk?"
+    match: exact
+    command: ["df", "-h"]
+
+    # Example of routing replies to "admin" instead of sender
+    reply_to: admin
+
+    split_reply: true
+    chunk_size: 1400
+    numbered_chunks: true
+
+  # ------------------------------------------
+  # 4) Output-only reply mode (no exit / command)
+  # ------------------------------------------
+  - name: uptime
+    sender:
+      - "@PHONE@"
+    trigger: "uptime?"
+    match: exact
+    command: ["uptime"]
+
+    # Only show: [rule] + output
+    reply_mode: output
+
+    # Output is short; don't chunk
+    split_reply: false
+
+  # --------------------------------------------------
+  # 5) Multiple allowed senders (demonstration)
+  # --------------------------------------------------
+  # Uncomment and set numbers if you want a shared rule:
+  #
+  # - name: whoami
+  #   sender:
+  #     - "+15551234567"
+  #     - "+15557654321"
+  #   trigger: "whoami?"
+  #   match: exact
+  #   command: ["whoami"]
+  #   reply_mode: output

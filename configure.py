@@ -3,11 +3,17 @@
 configure.py
 
 Generates environment-specific files from .in templates:
+
   - rules.yaml                 (from rules.yaml.in)
-  - systemd/*.service          (from systemd/*.service.in)
-  - rules.d/*.yaml             (from rules.d/*.yaml.in)   
+  - systemd/*.service          (from templates/systemd/*.service.in)
+  - rules.d/*.yaml             (from templates/rules/*.yaml.in)   [SHIPPED TEMPLATES ONLY]
 
 Prompts for a Signal phone number, validates it, confirms it, and injects it.
+
+IMPORTANT SAFETY RULE:
+- rules.d/ is your "production rules" directory.
+- This script ONLY renders shipped templates from templates/rules/*.yaml.in into rules.d/*.yaml.
+- It will not touch other rules in rules.d/ (e.g. custody-week.yaml) unless a shipped template has the same output filename.
 
 Also offers to enable systemd user lingering so user services can start at boot:
   sudo loginctl enable-linger <user>
@@ -25,7 +31,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, List, Tuple
 
 
 E164_RE = re.compile(r"^\+\d{7,15}$")
@@ -46,9 +52,9 @@ def write_text(p: Path, s: str) -> None:
 
 def prompt_phone() -> str:
     while True:
-        phone = input("Enter Signal phone number in E.164 format (e.g. +13213213210): ").strip()
+        phone = input("Enter Signal phone number in E.164 format (e.g. +15551234567): ").strip()
         if not E164_RE.match(phone):
-            eprint("Invalid format. Must be E.164 like +13213213210 (7–15 digits).")
+            eprint("Invalid format. Must be E.164 like +15551234567 (7–15 digits).")
             continue
 
         confirm = input(f"You entered {phone}. Is that correct? [y/N]: ").strip().lower()
@@ -122,8 +128,12 @@ def iter_template_files(repo_root: Path) -> List[Tuple[Path, Path]]:
 
     Supported:
       - rules.yaml.in -> rules.yaml
-      - systemd/*.in -> systemd/* (same filename without .in)
-      - rules.d/*.yaml.in -> rules.d/*.yaml
+      - templates/systemd/*.service.in -> systemd/*.service
+      - templates/rules/*.yaml.in -> rules.d/*.yaml   (SHIPPED TEMPLATES ONLY)
+
+    NOTE:
+      - rules.d/ may also contain user rules (hand-authored). This generator does not scan rules.d/*.in anymore.
+      - Only templates under templates/ are considered "owned outputs".
     """
     pairs: List[Tuple[Path, Path]] = []
 
@@ -131,21 +141,30 @@ def iter_template_files(repo_root: Path) -> List[Tuple[Path, Path]]:
     root_rules_in = repo_root / "rules.yaml.in"
     if root_rules_in.exists():
         pairs.append((root_rules_in, repo_root / "rules.yaml"))
+    else:
+        raise FileNotFoundError(f"Missing required template: {root_rules_in}")
 
-    # systemd/*.in
-    systemd_dir = repo_root / "systemd"
-    if systemd_dir.exists():
-        for p in sorted(systemd_dir.glob("*.in")):
-            out = p.with_suffix("")  # removes ".in"
-            pairs.append((p, out))
+    # templates/systemd/*.service.in -> systemd/*.service
+    tpl_systemd_dir = repo_root / "templates" / "systemd"
+    out_systemd_dir = repo_root / "systemd"
+    if not tpl_systemd_dir.exists():
+        raise FileNotFoundError(f"Missing templates directory: {tpl_systemd_dir}")
 
-    # rules.d/*.yaml.in  <-- NEW
-    rulesd_dir = repo_root / "rules.d"
-    if rulesd_dir.exists():
-        for p in sorted(rulesd_dir.glob("*.yaml.in")):
-            # remove only the trailing ".in"
-            out = Path(str(p)[:-3])
-            pairs.append((p, out))
+    for p in sorted(tpl_systemd_dir.glob("*.service.in")):
+        out_name = p.name[:-3]  # drop trailing ".in"
+        out_path = out_systemd_dir / out_name
+        pairs.append((p, out_path))
+
+    # templates/rules/*.yaml.in -> rules.d/*.yaml
+    tpl_rules_dir = repo_root / "templates" / "rules"
+    out_rules_dir = repo_root / "rules.d"
+    if not tpl_rules_dir.exists():
+        raise FileNotFoundError(f"Missing templates directory: {tpl_rules_dir}")
+
+    for p in sorted(tpl_rules_dir.glob("*.yaml.in")):
+        out_name = p.name[:-3]  # drop trailing ".in"
+        out_path = out_rules_dir / out_name
+        pairs.append((p, out_path))
 
     return pairs
 
@@ -176,15 +195,19 @@ def main() -> int:
         "USER": user,
     }
 
-    pairs = iter_template_files(repo_root)
-    if not pairs:
-        eprint("No templates found. Expected at least rules.yaml.in or systemd/*.in or rules.d/*.yaml.in")
+    try:
+        pairs = iter_template_files(repo_root)
+    except Exception as e:
+        eprint(f"Template discovery error: {e}")
         return 2
 
     generated: List[Path] = []
     for tpl_path, out_path in pairs:
         tpl = read_text(tpl_path)
         rendered = render_template(tpl, vars)
+
+        # Safety: only overwrite if the output corresponds to a shipped template
+        # (which is true for every out_path derived from iter_template_files).
         write_text(out_path, rendered)
         generated.append(out_path)
 
@@ -195,10 +218,11 @@ def main() -> int:
     maybe_enable_linger(user)
 
     print("\nNext steps:")
-    print("  make install     # runs configure, installs + enables + starts services. Only needs to be run again if you change templates or phone number")
+    print("  make install     # runs configure, installs user units, daemon-reload - only required on first setup or when templates change")
+    print("  make start       # enable + start services")
     print("  make status      # show service status")
     print("  make logs        # tail logs")
-    print("  make uninstall   # remove services\n")
+    print("  make uninstall   # remove installed services (does not touch rules.d/)\n")
 
     return 0
 
