@@ -214,3 +214,4 @@ ha_token
 ha_get_state.py
 rules.d/custody_week.yaml
 rules.d/example-rules.yaml
+rules.d/custody-week.yaml
