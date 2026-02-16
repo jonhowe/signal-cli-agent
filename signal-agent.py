@@ -4,37 +4,65 @@ signal-agent.py
 
 DBus listener for signal-cli + YAML rule engine.
 
-NEW:
-- rules_dir: load rules from a directory of YAML files (rules.d/*.yaml)
-- reply_mode: full | output | bare
-- numbered_chunks: prefix split chunks with: "[<rule> message i/n]" (only when 2+ chunks)
-
-Usage:
-  python3 signal-agent.py ./rules.yaml
+Features:
+- Session bus connection to org.asamk.Signal (normal mode)
+- Test mode: --test (no DBus, no Signal sends)
+- Rules loaded from:
+    - root rules file (rules.yaml)
+    - optional rules_dir: (rules.d/*.yaml)
+- Sender matching supports:
+    - sender: "+1555..."
+    - sender: ["+1555...", "+1666..."]
+- Matching: exact | contains | startswith | regex
+- Commands: command (argv list) or command_template + args validation
+- Rate limiting: cooldown_sec + max_runs_per_hour per sender+rule
+- Redaction patterns
+- Reply formatting modes:
+    - full   : [rule] exit=0 + $ cmd + output
+    - output : [rule] + output
+    - bare   : output only
+- Output chunking:
+    - split_reply + chunk_size
+    - numbered_chunks adds "[rule message i/n]" prefixes only when 2+ chunks
+- Structured logging:
+    - text/json, level, optional log file
+- Dry run:
+    - global (globals.dry_run or --dry-run)
+    - per rule (rule.dry_run)
+    - In dry-run, commands still execute, but sends are suppressed
 """
 
 from __future__ import annotations
 
+import argparse
+import json
+import logging
 import os
 import re
-import sys
-import time
-import yaml
 import shlex
 import signal as pysignal
 import subprocess
+import sys
+import time
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from collections import defaultdict, deque
 
-from pydbus import SessionBus
-from gi.repository import GLib
+import yaml
+
+# Optional imports: only needed in non-test mode
+try:
+    from pydbus import SessionBus  # type: ignore
+    from gi.repository import GLib  # type: ignore
+except Exception:
+    SessionBus = None  # type: ignore
+    GLib = None  # type: ignore
 
 
 # -----------------------------
-# Utilities
+# Time / formatting
 # -----------------------------
 
 def now_ts() -> float:
@@ -46,9 +74,64 @@ def fmt_ts(ts: Optional[float] = None) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def log(msg: str) -> None:
-    print(f"[{fmt_ts()}] {msg}", flush=True)
+# -----------------------------
+# Logging
+# -----------------------------
 
+logger = logging.getLogger("signal-agent")
+
+
+class JsonLogFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        payload: Dict[str, Any] = {
+            "ts": fmt_ts(),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exc"] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False)
+
+
+def setup_logging(level: str = "INFO", logfile: str = "", log_format: str = "text") -> None:
+    levelno = getattr(logging, level.upper(), logging.INFO)
+
+    if logfile:
+        handler: logging.Handler = logging.FileHandler(logfile)
+    else:
+        handler = logging.StreamHandler(sys.stdout)
+
+    if (log_format or "text").lower() == "json":
+        handler.setFormatter(JsonLogFormatter())
+    else:
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+
+    root = logging.getLogger()
+    root.setLevel(levelno)
+
+    # Clear existing handlers (avoid duplicates)
+    for h in list(root.handlers):
+        root.removeHandler(h)
+
+    root.addHandler(handler)
+
+
+def log_info(msg: str) -> None:
+    logger.info(msg)
+
+
+def log_warn(msg: str) -> None:
+    logger.warning(msg)
+
+
+def log_err(msg: str) -> None:
+    logger.error(msg)
+
+
+# -----------------------------
+# Utilities
+# -----------------------------
 
 def safe_int(v: Any, default: int) -> int:
     try:
@@ -81,11 +164,14 @@ def apply_redactions(s: str, patterns: List[str]) -> str:
         try:
             out = re.sub(pat, "[REDACTED]", out)
         except re.error:
-            pass
+            continue
     return out
 
 
 def split_chunks_by_lines(s: str, chunk_size: int) -> List[str]:
+    """
+    Split a string into chunks on newline boundaries (avoid breaking lines).
+    """
     if chunk_size <= 0:
         return [s]
 
@@ -108,57 +194,6 @@ def split_chunks_by_lines(s: str, chunk_size: int) -> List[str]:
 
     return chunks or [""]
 
-
-# -----------------------------
-# YAML config
-# -----------------------------
-
-@dataclass
-class GlobalsCfg:
-    deny_groups: bool = True
-    default_timeout_sec: int = 5
-    default_max_reply_chars: int = 3500
-    default_split_reply: bool = False
-    default_chunk_size: int = 1500
-    numbered_chunks: bool = False
-
-    default_match: str = "exact"
-    default_case_sensitive: bool = False
-
-    default_cooldown_sec: int = 2
-    default_max_runs_per_hour: int = 30
-
-    reply_prefix: str = ""
-    reply_suffix: str = ""
-    default_reply_to: str = "sender"
-    admin: str = ""
-
-    redact_regex: List[str] = None  # type: ignore
-
-    @staticmethod
-    def from_dict(d: Dict[str, Any]) -> "GlobalsCfg":
-        return GlobalsCfg(
-            deny_groups=bool(d.get("deny_groups", True)),
-            default_timeout_sec=safe_int(d.get("default_timeout_sec", 5), 5),
-            default_max_reply_chars=safe_int(d.get("default_max_reply_chars", 3500), 3500),
-            default_split_reply=bool(d.get("default_split_reply", False)),
-            default_chunk_size=safe_int(d.get("default_chunk_size", 1500), 1500),
-            numbered_chunks=bool(d.get("numbered_chunks", False)),
-            default_match=str(d.get("default_match", "exact")).strip(),
-            default_case_sensitive=bool(d.get("default_case_sensitive", False)),
-            default_cooldown_sec=safe_int(d.get("default_cooldown_sec", 2), 2),
-            default_max_runs_per_hour=safe_int(d.get("default_max_runs_per_hour", 30), 30),
-            reply_prefix=str(d.get("reply_prefix", "")),
-            reply_suffix=str(d.get("reply_suffix", "")),
-            default_reply_to=str(d.get("default_reply_to", "sender")),
-            admin=str(d.get("admin", "")),
-            redact_regex=list(d.get("redact_regex", []) or []),
-        )
-
-
-# -----------------------------
-# Matching & command building
-# -----------------------------
 
 def normalize_text(s: str, case_sensitive: bool) -> str:
     return s if case_sensitive else s.lower()
@@ -191,6 +226,10 @@ def render_command_template(template: List[str], values: Dict[str, Any]) -> List
 
 
 def validate_args_from_match(args_schema: Dict[str, Any], match_obj: re.Match) -> Dict[str, Any]:
+    """
+    Maps regex capture groups to args keys in the order declared in args_schema.
+    Supports int bounds validation.
+    """
     keys = list(args_schema.keys())
     groups = list(match_obj.groups())
 
@@ -199,6 +238,7 @@ def validate_args_from_match(args_schema: Dict[str, Any], match_obj: re.Match) -
         if idx >= len(groups):
             raise ValueError(f"Missing regex capture group for arg '{key}'")
         raw = groups[idx]
+
         schema = args_schema.get(key, {}) or {}
         typ = str(schema.get("type", "str")).lower()
 
@@ -222,6 +262,11 @@ def validate_args_from_match(args_schema: Dict[str, Any], match_obj: re.Match) -
 # -----------------------------
 
 class RateLimiter:
+    """
+    Rate limits per (sender, rule_name):
+      - cooldown_sec: minimum seconds between runs
+      - max_runs_per_hour: max runs in rolling 3600s window
+    """
     def __init__(self) -> None:
         self.last_run: Dict[Tuple[str, str], float] = {}
         self.runs: Dict[Tuple[str, str], deque] = defaultdict(deque)
@@ -253,6 +298,9 @@ class RateLimiter:
 # -----------------------------
 
 def send_signal_message(signal_obj: Any, recipient: str, message: str) -> None:
+    """
+    signal-cli DBus signatures vary by version. Try several common forms.
+    """
     if not isinstance(message, str):
         message = str(message)
 
@@ -273,10 +321,86 @@ def send_signal_message(signal_obj: Any, recipient: str, message: str) -> None:
 
 
 # -----------------------------
+# YAML config
+# -----------------------------
+
+@dataclass
+class GlobalsCfg:
+    deny_groups: bool = True
+
+    default_timeout_sec: int = 5
+    default_max_reply_chars: int = 3500
+    default_split_reply: bool = False
+    default_chunk_size: int = 1500
+    numbered_chunks: bool = False
+
+    default_match: str = "exact"
+    default_case_sensitive: bool = False
+
+    default_cooldown_sec: int = 2
+    default_max_runs_per_hour: int = 30
+
+    reply_prefix: str = ""
+    reply_suffix: str = ""
+    default_reply_to: str = "sender"
+    admin: str = ""
+
+    redact_regex: List[str] = None  # type: ignore
+
+    # NEW: logging & dry-run defaults (can be overridden by CLI)
+    log_level: str = "INFO"
+    log_format: str = "text"   # text|json
+    log_file: str = ""         # empty => stdout
+    dry_run: bool = False      # suppress sends globally
+
+    @staticmethod
+    def from_dict(d: Dict[str, Any]) -> "GlobalsCfg":
+        return GlobalsCfg(
+            deny_groups=bool(d.get("deny_groups", True)),
+
+            default_timeout_sec=safe_int(d.get("default_timeout_sec", 5), 5),
+            default_max_reply_chars=safe_int(d.get("default_max_reply_chars", 3500), 3500),
+            default_split_reply=bool(d.get("default_split_reply", False)),
+            default_chunk_size=safe_int(d.get("default_chunk_size", 1500), 1500),
+            numbered_chunks=bool(d.get("numbered_chunks", False)),
+
+            default_match=str(d.get("default_match", "exact")).strip(),
+            default_case_sensitive=bool(d.get("default_case_sensitive", False)),
+
+            default_cooldown_sec=safe_int(d.get("default_cooldown_sec", 2), 2),
+            default_max_runs_per_hour=safe_int(d.get("default_max_runs_per_hour", 30), 30),
+
+            reply_prefix=str(d.get("reply_prefix", "")),
+            reply_suffix=str(d.get("reply_suffix", "")),
+            default_reply_to=str(d.get("default_reply_to", "sender")),
+            admin=str(d.get("admin", "")),
+
+            redact_regex=list(d.get("redact_regex", []) or []),
+
+            log_level=str(d.get("log_level", "INFO")),
+            log_format=str(d.get("log_format", "text")),
+            log_file=str(d.get("log_file", "")),
+            dry_run=bool(d.get("dry_run", False)),
+        )
+
+
+# -----------------------------
 # Config loader (rules.yaml + rules.d/*.yaml)
 # -----------------------------
 
 class ConfigLoader:
+    """
+    Loads a root rules file that can contain:
+      - globals: {...}
+      - rules_dir: /path/to/rules.d   (optional; defaults to <rules.yaml dir>/rules.d)
+      - rules: [...]                 (optional; inline rules)
+
+    Then loads rules from each *.yaml/*.yml file in rules_dir.
+    Supports file formats in rules.d:
+      1) {rules: [ ... ]}
+      2) [ ... ]  (list of rules)
+      3) {name: ..., trigger: ...} (single rule)
+    """
     def __init__(self, root_path: Path) -> None:
         self.root_path = root_path
         self._mtimes: Dict[Path, float] = {}
@@ -290,14 +414,13 @@ class ConfigLoader:
         return sorted([p for p in rules_dir.iterdir() if p.is_file() and p.suffix in (".yml", ".yaml")])
 
     def _load_yaml_file(self, p: Path) -> Any:
-        txt = p.read_text(encoding="utf-8")
-        return yaml.safe_load(txt) or {}
+        return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
 
     def load_if_changed(self) -> None:
         if not self.root_path.exists():
             raise FileNotFoundError(f"Rules file not found: {self.root_path}")
 
-        # Determine which files we should consider for reload (root + rule files)
+        # Load root file to find globals + rules_dir
         root_data = self._load_yaml_file(self.root_path)
         globals_dict = root_data.get("globals", {}) or {}
         self.globals_cfg = GlobalsCfg.from_dict(globals_dict)
@@ -306,15 +429,14 @@ class ConfigLoader:
         if rules_dir_val:
             rules_dir = Path(os.path.expanduser(str(rules_dir_val))).resolve()
         else:
-            # default: rules.d next to rules.yaml
             rules_dir = (self.root_path.parent / "rules.d").resolve()
 
         rule_files = self._list_rule_files(rules_dir)
 
-        # Build file list to check mtimes
         files_to_check = [self.root_path] + rule_files
-
         changed = False
+
+        # Detect changes (any file mtime changes)
         for p in files_to_check:
             try:
                 m = p.stat().st_mtime
@@ -327,22 +449,16 @@ class ConfigLoader:
         if not changed and self.rules_dir == rules_dir:
             return
 
-        # Reload everything
         merged_rules: List[Dict[str, Any]] = []
 
-        # rules inline in root file (optional)
+        # Optional inline rules from root file
         root_rules = root_data.get("rules")
         if isinstance(root_rules, list):
             merged_rules.extend(root_rules)
 
-        # rules from rules.d/*.yaml
+        # rules.d/*.yaml
         for rf in rule_files:
             data = self._load_yaml_file(rf)
-
-            # Allow file formats:
-            # 1) {rules: [ ... ]}
-            # 2) [ ... ]  (list of rules)
-            # 3) {name: ..., trigger: ...} (single rule)
             if isinstance(data, dict) and "rules" in data and isinstance(data["rules"], list):
                 merged_rules.extend(data["rules"])
             elif isinstance(data, list):
@@ -360,31 +476,86 @@ class ConfigLoader:
 
         self.rules_dir = rules_dir
         self.rules = merged_rules
-
-        log(f"Reloaded rules: {self.root_path} + {rules_dir} (files={len(rule_files)}, rules={len(self.rules)})")
+        log_info(f"Reloaded rules: {self.root_path} + {rules_dir} (files={len(rule_files)}, rules={len(self.rules)})")
 
 
 # -----------------------------
-# Agent
+# Reply composition
+# -----------------------------
+
+def build_reply(
+    rule_name: str,
+    reply_mode: str,
+    exit_code: int,
+    display_cmd: str,
+    out: str,
+    reply_prefix: str,
+    reply_suffix: str,
+) -> str:
+    """
+    reply_mode:
+      - full:   [rule] exit=0 + $ cmd + out
+      - output: [rule] + out
+      - bare:   out
+    """
+    rm = (reply_mode or "full").strip().lower()
+    if rm == "output":
+        body = f"[{rule_name}]\n{out}"
+    elif rm == "bare":
+        body = out
+    else:
+        body = f"[{rule_name}] exit={exit_code}\n$ {display_cmd}\n{out}"
+    return (reply_prefix or "") + body + (reply_suffix or "")
+
+
+def sender_allowed(rule_sender: Any, actual_sender: str) -> bool:
+    """
+    Supports:
+      sender: "+1555"
+      sender: ["+1555", "+1666"]
+      sender: "" / missing => allow all senders (caller must handle global allowlists if added later)
+    """
+    if rule_sender is None:
+        return True
+    if isinstance(rule_sender, (list, tuple)):
+        allowed = [str(s).strip() for s in rule_sender if s is not None and str(s).strip()]
+        if not allowed:
+            return True
+        return actual_sender in allowed
+    s = str(rule_sender).strip()
+    if not s:
+        return True
+    return s == actual_sender
+
+
+# -----------------------------
+# Agent (normal mode)
 # -----------------------------
 
 class SignalAgent:
-    def __init__(self, rules_path: Path) -> None:
+    def __init__(self, rules_path: Path, global_dry_run: bool = False) -> None:
+        if SessionBus is None or GLib is None:
+            raise RuntimeError("pydbus/GLib not available. Install dependencies or run in --test mode.")
+
         self.rules_loader = ConfigLoader(rules_path)
         self.rate_limiter = RateLimiter()
+        self.global_dry_run = global_dry_run
 
         self.bus = SessionBus()
         self.signal = self.bus.get("org.asamk.Signal")
 
-        log("✓ Connected to org.asamk.Signal on the session bus")
-        log(f"Listening… (root rules: {rules_path})")
+        log_info("✓ Connected to org.asamk.Signal on the session bus")
+        log_info(f"Listening… (root rules: {rules_path})")
 
         self.rules_loader.load_if_changed()
 
+        # Subscribe (pydbus maps to onX attributes)
         self.signal.onMessageReceived = self.on_message_received
         self.signal.onMessageReceivedV2 = self.on_message_received_v2
         self.signal.onSyncMessageReceived = self.on_sync_message_received
         self.signal.onSyncMessageReceivedV2 = self.on_sync_message_received_v2
+
+    # --- Signal handlers ---
 
     def on_message_received(self, timestamp: int, sender: str, group_id: Any, message: str, attachments: Any) -> None:
         self.handle_incoming("msg", timestamp, sender, None, group_id, message)
@@ -398,28 +569,37 @@ class SignalAgent:
     def on_sync_message_received_v2(self, timestamp: int, sender: str, destination: str, group_id: Any, message: str, attachments: Any, options: Any = None) -> None:
         self.handle_incoming("syncv2", timestamp, sender, destination, group_id, message)
 
+    # --- Core processing ---
+
+    def maybe_send(self, target: str, payload: str, dry_run: bool) -> None:
+        if dry_run or self.global_dry_run:
+            log_info(f"[DRY-RUN] Would send to {target}: {payload[:200].replace(chr(10), ' ')}")
+            return
+        send_signal_message(self.signal, target, payload)
+
     def handle_incoming(self, kind: str, timestamp_ms: int, sender: str, destination: Optional[str], group_id: Any, message: str) -> None:
         try:
             self.rules_loader.load_if_changed()
         except Exception as e:
-            log(f"ERROR reloading rules: {e}")
+            log_err(f"ERROR reloading rules: {e}")
             return
 
         g = self.rules_loader.globals_cfg
+
         is_group = looks_like_group_id(group_id)
         if is_group and g.deny_groups:
-            log(f"(group ignored) {sender}: {message}")
+            log_info(f"(group ignored) {sender}: {message}")
             return
 
-        src = kind
         dst = destination or "-"
-        log(f"{sender} [{src} -> {dst}]: {message}")
+        log_info(f"{sender} [{kind} -> {dst}]: {message}")
 
         for rule in self.rules_loader.rules:
             try:
                 rule_name = str(rule.get("name", "unnamed"))
-                rule_sender = str(rule.get("sender", "")).strip()
-                if rule_sender and rule_sender != sender:
+
+                # Sender check (single or list)
+                if not sender_allowed(rule.get("sender"), sender):
                     continue
 
                 match_mode = str(rule.get("match", g.default_match))
@@ -432,11 +612,12 @@ class SignalAgent:
                 if not matched:
                     continue
 
+                # Rate limiting
                 cooldown_sec = safe_int(rule.get("cooldown_sec", g.default_cooldown_sec), g.default_cooldown_sec)
                 max_runs_per_hour = safe_int(rule.get("max_runs_per_hour", g.default_max_runs_per_hour), g.default_max_runs_per_hour)
                 ok, why = self.rate_limiter.allow(sender, rule_name, cooldown_sec, max_runs_per_hour)
                 if not ok:
-                    log(f"↳ rule matched but blocked: {rule_name} ({why})")
+                    log_warn(f"↳ rule matched but blocked: {rule_name} ({why})")
                     continue
 
                 # Build command
@@ -457,8 +638,15 @@ class SignalAgent:
                 display_cmd = " ".join(shlex.quote(c) for c in cmd)
                 timeout_sec = safe_int(rule.get("timeout_sec", g.default_timeout_sec), g.default_timeout_sec)
 
-                log(f"↳ rule matched: {rule_name} -> running: {display_cmd}")
-                completed = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec, check=False)
+                log_info(f"↳ rule matched: {rule_name} -> running: {display_cmd}")
+
+                completed = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_sec,
+                    check=False,
+                )
 
                 stdout = completed.stdout or ""
                 stderr = completed.stderr or ""
@@ -471,7 +659,7 @@ class SignalAgent:
                 out = apply_redactions(out, g.redact_regex)
                 out = shorten(out, safe_int(rule.get("max_reply_chars", g.default_max_reply_chars), g.default_max_reply_chars))
 
-                # Reply routing
+                # Reply target routing
                 reply_to = str(rule.get("reply_to", g.default_reply_to)).strip().lower()
                 if reply_to == "sender":
                     target = sender
@@ -482,25 +670,31 @@ class SignalAgent:
                 else:
                     target = sender
 
-                # Reply format
+                # Reply formatting
                 reply_prefix = str(rule.get("reply_prefix", g.reply_prefix))
                 reply_suffix = str(rule.get("reply_suffix", g.reply_suffix))
                 reply_mode = str(rule.get("reply_mode", "full")).strip().lower()
 
-                if reply_mode == "output":
-                    reply_body = f"[{rule_name}]\n" + out
-                elif reply_mode == "bare":
-                    reply_body = out
-                else:
-                    reply_body = f"[{rule_name}] exit={exit_code}\n$ {display_cmd}\n" + out
-
-                reply = reply_prefix + reply_body + reply_suffix
+                reply = build_reply(
+                    rule_name=rule_name,
+                    reply_mode=reply_mode,
+                    exit_code=exit_code,
+                    display_cmd=display_cmd,
+                    out=out,
+                    reply_prefix=reply_prefix,
+                    reply_suffix=reply_suffix,
+                )
 
                 # Split behavior
                 split_reply = bool(rule.get("split_reply", g.default_split_reply))
                 chunk_size = safe_int(rule.get("chunk_size", g.default_chunk_size), g.default_chunk_size)
                 numbered_chunks = bool(rule.get("numbered_chunks", g.numbered_chunks))
 
+                # Dry-run: rule-level overrides global default
+                rule_dry_run = bool(rule.get("dry_run", False))
+                effective_dry_run = rule_dry_run or self.global_dry_run or g.dry_run
+
+                # Send reply
                 try:
                     if split_reply and chunk_size > 0 and len(reply) > chunk_size:
                         parts = [p for p in split_chunks_by_lines(reply, chunk_size) if p]
@@ -508,7 +702,6 @@ class SignalAgent:
 
                         for idx, part in enumerate(parts, start=1):
                             if numbered_chunks and total > 1:
-                                # If reply_mode is bare, rule name isn't present; keep a generic prefix.
                                 if reply_mode == "bare":
                                     prefix = f"[message {idx}/{total}]\n"
                                 else:
@@ -517,35 +710,209 @@ class SignalAgent:
                             else:
                                 payload = part
 
-                            send_signal_message(self.signal, target, payload)
+                            self.maybe_send(target, payload, effective_dry_run)
                             time.sleep(0.2)
                     else:
-                        send_signal_message(self.signal, target, reply)
+                        self.maybe_send(target, reply, effective_dry_run)
 
-                    log("↳ reply sent")
+                    log_info("↳ reply handled")
                 except Exception as e:
-                    log(f"↳ FAILED to send reply: {e}")
+                    log_err(f"↳ FAILED to send reply: {e}")
 
-                return  # stop after first matched rule
+                return  # Stop after first matched rule
 
             except Exception as e:
-                log(f"↳ ERROR processing rule: {e}")
+                log_err(f"↳ ERROR processing rule: {e}")
                 continue
 
 
+# -----------------------------
+# Test mode runner (no DBus)
+# -----------------------------
+
+def run_test_mode(rules_path: Path, sender: str, message: str, dry_run: bool) -> int:
+    """
+    Loads rules and simulates evaluation/execution locally.
+    Prints the exact reply that would be sent (or notes dry-run).
+    """
+    loader = ConfigLoader(rules_path)
+    loader.load_if_changed()
+    g = loader.globals_cfg
+    rate_limiter = RateLimiter()
+
+    log_info(f"[TEST] rules={rules_path}")
+    log_info(f"[TEST] sender={sender} message={message!r}")
+
+    for rule in loader.rules:
+        try:
+            rule_name = str(rule.get("name", "unnamed"))
+            if not sender_allowed(rule.get("sender"), sender):
+                continue
+
+            match_mode = str(rule.get("match", g.default_match))
+            case_sensitive = bool(rule.get("case_sensitive", g.default_case_sensitive))
+            trigger = str(rule.get("trigger", "")).strip()
+            if not trigger:
+                continue
+
+            matched, mobj = match_trigger(message, trigger, match_mode, case_sensitive)
+            if not matched:
+                continue
+
+            cooldown_sec = safe_int(rule.get("cooldown_sec", g.default_cooldown_sec), g.default_cooldown_sec)
+            max_runs_per_hour = safe_int(rule.get("max_runs_per_hour", g.default_max_runs_per_hour), g.default_max_runs_per_hour)
+            ok, why = rate_limiter.allow(sender, rule_name, cooldown_sec, max_runs_per_hour)
+            if not ok:
+                log_warn(f"[TEST] matched but rate-limited: {rule_name} ({why})")
+                continue
+
+            if "command" in rule:
+                cmd = list(rule.get("command") or [])
+            else:
+                template = list(rule.get("command_template") or [])
+                if not template:
+                    continue
+                args_schema = dict(rule.get("args") or {})
+                values: Dict[str, Any] = {}
+                if args_schema:
+                    if not mobj:
+                        raise ValueError("args schema provided but regex match object missing")
+                    values = validate_args_from_match(args_schema, mobj)
+                cmd = render_command_template(template, values)
+
+            display_cmd = " ".join(shlex.quote(c) for c in cmd)
+            timeout_sec = safe_int(rule.get("timeout_sec", g.default_timeout_sec), g.default_timeout_sec)
+
+            log_info(f"[TEST] matched rule: {rule_name}")
+            log_info(f"[TEST] would run: {display_cmd}")
+
+            completed = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec,
+                check=False,
+            )
+
+            stdout = completed.stdout or ""
+            stderr = completed.stderr or ""
+            exit_code = completed.returncode
+
+            out = stdout
+            if stderr.strip():
+                out = out.rstrip("\n") + ("\n\n[stderr]\n" + stderr)
+
+            out = apply_redactions(out, g.redact_regex)
+            out = shorten(out, safe_int(rule.get("max_reply_chars", g.default_max_reply_chars), g.default_max_reply_chars))
+
+            reply_prefix = str(rule.get("reply_prefix", g.reply_prefix))
+            reply_suffix = str(rule.get("reply_suffix", g.reply_suffix))
+            reply_mode = str(rule.get("reply_mode", "full")).strip().lower()
+
+            reply = build_reply(
+                rule_name=rule_name,
+                reply_mode=reply_mode,
+                exit_code=exit_code,
+                display_cmd=display_cmd,
+                out=out,
+                reply_prefix=reply_prefix,
+                reply_suffix=reply_suffix,
+            )
+
+            split_reply = bool(rule.get("split_reply", g.default_split_reply))
+            chunk_size = safe_int(rule.get("chunk_size", g.default_chunk_size), g.default_chunk_size)
+            numbered_chunks = bool(rule.get("numbered_chunks", g.numbered_chunks))
+
+            rule_dry_run = bool(rule.get("dry_run", False))
+            effective_dry_run = dry_run or g.dry_run or rule_dry_run
+
+            print("\n===== TEST RESULT =====")
+            print(f"rule: {rule_name}")
+            print(f"exit: {exit_code}")
+            print(f"dry_run: {effective_dry_run}")
+            print("reply:")
+            if split_reply and chunk_size > 0 and len(reply) > chunk_size:
+                parts = [p for p in split_chunks_by_lines(reply, chunk_size) if p]
+                total = len(parts)
+                for idx, part in enumerate(parts, start=1):
+                    if numbered_chunks and total > 1:
+                        if reply_mode == "bare":
+                            prefix = f"[message {idx}/{total}]\n"
+                        else:
+                            prefix = f"[{rule_name} message {idx}/{total}]\n"
+                        print(prefix + part)
+                    else:
+                        print(part)
+                    print("-----")
+            else:
+                print(reply)
+            print("=======================\n")
+
+            return 0
+
+        except Exception as e:
+            log_err(f"[TEST] error processing rule: {e}")
+            continue
+
+    log_warn("[TEST] no matching rule found")
+    return 1
+
+
+# -----------------------------
+# Main
+# -----------------------------
+
 def main() -> int:
-    rules_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("./rules.yaml")
+    parser = argparse.ArgumentParser(description="Signal CLI Agent (DBus-driven rule engine)")
+    parser.add_argument("rules_path", nargs="?", default="./rules.yaml", help="Path to root rules.yaml")
+
+    parser.add_argument("--test", action="store_true", help="Test mode: evaluate one message and exit (no DBus)")
+    parser.add_argument("--sender", type=str, default="", help="Sender number for --test")
+    parser.add_argument("--message", type=str, default="", help="Message text for --test")
+
+    parser.add_argument("--dry-run", action="store_true", help="Global dry-run: suppress sending replies")
+
+    parser.add_argument("--log-level", type=str, default="", help="Override log level (INFO, DEBUG, ...)")
+    parser.add_argument("--log-format", type=str, default="", help="Override log format (text|json)")
+    parser.add_argument("--log-file", type=str, default="", help="Write logs to this file instead of stdout")
+
+    args = parser.parse_args()
+
+    rules_path = Path(args.rules_path).resolve()
     if not rules_path.exists():
-        log(f"ERROR: rules file not found: {rules_path}")
+        print(f"ERROR: rules file not found: {rules_path}", file=sys.stderr)
         return 2
 
+    # Load globals early to initialize logging defaults (then CLI overrides)
+    loader = ConfigLoader(rules_path)
+    loader.load_if_changed()
+    g = loader.globals_cfg
+
+    level = args.log_level or g.log_level
+    fmt = args.log_format or g.log_format
+    logfile = args.log_file or g.log_file
+    setup_logging(level=level, logfile=logfile, log_format=fmt)
+
+    # Ctrl+C
     def _sigint(*_args: Any) -> None:
-        log("Stopping…")
+        log_info("Stopping…")
         raise KeyboardInterrupt
 
     pysignal.signal(pysignal.SIGINT, _sigint)
 
-    SignalAgent(rules_path)
+    if args.test:
+        if not args.sender or not args.message:
+            print("ERROR: --test requires --sender and --message", file=sys.stderr)
+            return 2
+        return run_test_mode(rules_path, args.sender, args.message, dry_run=args.dry_run)
+
+    # Normal mode
+    global_dry_run = bool(args.dry_run or g.dry_run)
+
+    agent = SignalAgent(rules_path, global_dry_run=global_dry_run)
+    if GLib is None:
+        raise RuntimeError("GLib not available; cannot run main loop")
+
     GLib.MainLoop().run()
     return 0
 

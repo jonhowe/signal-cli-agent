@@ -1,68 +1,89 @@
 SHELL := /bin/bash
+
+REPO := $(shell pwd)
 USER_SYSTEMD_DIR := $(HOME)/.config/systemd/user
 
-UNITS := signal-cli-dbus.service signal-agent.service
+AGENT_UNIT := signal-agent.service
+DBUS_UNIT  := signal-cli-dbus.service
 
-.PHONY: help quickstart configure install start stop restart status logs uninstall clean
-
+.PHONY: help
 help:
 	@echo "Targets:"
-	@echo "  make quickstart  - configure, install, enable, and start services (recommended)"
-	@echo "  make configure   - run configure.py to generate rules.yaml + rendered unit files"
-	@echo "  make install     - copy units to $(USER_SYSTEMD_DIR), daemon-reload, enable, start"
-	@echo "  make start       - start both services"
-	@echo "  make stop        - stop both services"
-	@echo "  make restart     - restart both services"
-	@echo "  make status      - show status for both services"
-	@echo "  make logs        - tail logs for both services"
-	@echo "  make uninstall   - stop/disable and remove installed user units"
-	@echo "  make clean       - remove generated files (rules.yaml + rendered unit files)"
+	@echo "  quickstart  - configure + install + start"
+	@echo "  configure   - run configure.py (generate rules + units)"
+	@echo "  install     - configure + install user units + daemon-reload"
+	@echo "  start       - enable + start services"
+	@echo "  stop        - stop services"
+	@echo "  restart     - restart services"
+	@echo "  status      - show status"
+	@echo "  logs        - tail logs"
+	@echo "  uninstall   - stop + disable + remove units + daemon-reload"
+	@echo "  clean       - remove generated files in repo"
+	@echo "  test        - show test-mode example command"
 
-quickstart: install
-	@echo "Quickstart complete."
+.PHONY: quickstart
+quickstart: install start
 
+.PHONY: configure
 configure:
 	python3 ./configure.py
 
+.PHONY: install
 install: configure
-	@mkdir -p "$(USER_SYSTEMD_DIR)"
-	@cp -f systemd/signal-cli-dbus.service "$(USER_SYSTEMD_DIR)/signal-cli-dbus.service"
-	@cp -f systemd/signal-agent.service "$(USER_SYSTEMD_DIR)/signal-agent.service"
-	@systemctl --user daemon-reload
-	@systemctl --user enable $(UNITS)
-	@systemctl --user restart $(UNITS)
-	@echo "Installed + enabled + started user services."
+	mkdir -p "$(USER_SYSTEMD_DIR)"
+	install -m 0644 ./systemd/$(AGENT_UNIT) "$(USER_SYSTEMD_DIR)/$(AGENT_UNIT)"
+	install -m 0644 ./systemd/$(DBUS_UNIT)  "$(USER_SYSTEMD_DIR)/$(DBUS_UNIT)"
+	systemctl --user daemon-reload
 
+.PHONY: start
 start:
-	systemctl --user start $(UNITS)
+	systemctl --user enable --now $(DBUS_UNIT)
+	systemctl --user enable --now $(AGENT_UNIT)
 
+.PHONY: stop
 stop:
-	systemctl --user stop signal-agent.service signal-cli-dbus.service
+	-systemctl --user stop $(AGENT_UNIT)
+	-systemctl --user stop $(DBUS_UNIT)
 
+.PHONY: restart
 restart:
-	systemctl --user restart $(UNITS)
+	-systemctl --user restart $(DBUS_UNIT)
+	-systemctl --user restart $(AGENT_UNIT)
 
+.PHONY: status
 status:
-	@for u in $(UNITS); do \
-		echo "== $$u =="; \
-		systemctl --user status $$u --no-pager || true; \
-		echo; \
-	done
+	@echo "== $(DBUS_UNIT) =="
+	-systemctl --user status $(DBUS_UNIT) --no-pager
+	@echo
+	@echo "== $(AGENT_UNIT) =="
+	-systemctl --user status $(AGENT_UNIT) --no-pager
 
+.PHONY: logs
 logs:
-	@echo "Tailing logs (Ctrl+C to stop)…"
-	journalctl --user -u signal-cli-dbus.service -f &
-	journalctl --user -u signal-agent.service -f
+	journalctl --user -u $(AGENT_UNIT) -u $(DBUS_UNIT) -f --no-pager
 
+.PHONY: uninstall
 uninstall:
-	- systemctl --user stop $(UNITS)
-	- systemctl --user disable $(UNITS)
-	- rm -f "$(USER_SYSTEMD_DIR)/signal-agent.service" "$(USER_SYSTEMD_DIR)/signal-cli-dbus.service"
-	- systemctl --user daemon-reload
-	@echo "Uninstalled user services."
+	- systemctl --user stop $(AGENT_UNIT)
+	- systemctl --user stop $(DBUS_UNIT)
+	- systemctl --user disable $(AGENT_UNIT)
+	- systemctl --user disable $(DBUS_UNIT)
+	- rm -f "$(USER_SYSTEMD_DIR)/$(AGENT_UNIT)"
+	- rm -f "$(USER_SYSTEMD_DIR)/$(DBUS_UNIT)"
+	systemctl --user daemon-reload
 
+.PHONY: clean
 clean:
-	rm -f rules.yaml
-	rm -f systemd/signal-agent.service
-	rm -f systemd/signal-cli-dbus.service
-	@echo "Removed generated files."
+	- rm -f ./rules.yaml
+	- rm -f ./systemd/$(AGENT_UNIT)
+	- rm -f ./systemd/$(DBUS_UNIT)
+	# generated from rules.d/*.yaml.in
+	- find ./rules.d -maxdepth 1 -type f -name "*.yaml" ! -name "*.yaml.in" -print -delete
+
+.PHONY: test
+test:
+	@echo "Run a local simulation (no DBus, no Signal send):"
+	@echo "  python3 signal-agent.py ./rules.yaml --test --sender \"+15551234567\" --message \"disk?\""
+	@echo
+	@echo "With dry-run (suppresses sending in normal mode too):"
+	@echo "  python3 signal-agent.py ./rules.yaml --test --sender \"+15551234567\" --message \"disk?\" --dry-run"

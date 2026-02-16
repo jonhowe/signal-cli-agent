@@ -1,6 +1,7 @@
 rules:
   - name: home_dir_list
-    sender: "@PHONE@"
+    sender:
+      - "@PHONE@"
     trigger: "home directory?"
     match: exact
     command: ["ls", "-lah", "/home/@USER@"]
@@ -9,9 +10,11 @@ rules:
     split_reply: true
     chunk_size: 1400
     numbered_chunks: true
+    # default reply_mode is "full" (shows exit + command + output)
 
   - name: journal_tail
-    sender: "@PHONE@"
+    sender:
+      - "@PHONE@"
     match: regex
     trigger: "^tail journal (\\d+)$"
     command_template: ["journalctl", "-n", "{n}", "--no-pager"]
@@ -26,7 +29,8 @@ rules:
     numbered_chunks: true
 
   - name: disk_usage
-    sender: "@PHONE@"
+    sender:
+      - "@PHONE@"
     trigger: "disk?"
     match: exact
     command: ["df", "-h"]
@@ -34,3 +38,13 @@ rules:
     split_reply: true
     chunk_size: 1400
     numbered_chunks: true
+
+  # Example showing "output"-only reply mode (no exit code, no command)
+  - name: uptime
+    sender:
+      - "@PHONE@"
+    trigger: "uptime?"
+    match: exact
+    command: ["uptime"]
+    reply_mode: output
+    split_reply: false
