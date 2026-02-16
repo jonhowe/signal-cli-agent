@@ -1,0 +1,19 @@
+[Unit]
+Description=Signal CLI YAML rule agent
+After=signal-cli-dbus.service
+Requires=signal-cli-dbus.service
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@
+ExecStart=@PYTHON@ @AGENT_SCRIPT@ @RULES_YAML@
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+# Optional hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

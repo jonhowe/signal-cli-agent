@@ -1,0 +1,20 @@
+[Unit]
+Description=signal-cli DBus daemon (session bus)
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=@SIGNAL_CLI@ -a @PHONE@ daemon --dbus
+Restart=on-failure
+RestartSec=3
+
+# Helps avoid "TERM" killing issues
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+# Optional hardening (safe defaults)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

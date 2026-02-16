@@ -1,0 +1,36 @@
+rules:
+  - name: home_dir_list
+    sender: "@PHONE@"
+    trigger: "home directory?"
+    match: exact
+    command: ["ls", "-lah", "/home/@USER@"]
+    cooldown_sec: 5
+    max_runs_per_hour: 60
+    split_reply: true
+    chunk_size: 1400
+    numbered_chunks: true
+
+  - name: journal_tail
+    sender: "@PHONE@"
+    match: regex
+    trigger: "^tail journal (\\d+)$"
+    command_template: ["journalctl", "-n", "{n}", "--no-pager"]
+    args:
+      n:
+        type: int
+        min: 1
+        max: 200
+    timeout_sec: 8
+    split_reply: true
+    chunk_size: 1400
+    numbered_chunks: true
+
+  - name: disk_usage
+    sender: "@PHONE@"
+    trigger: "disk?"
+    match: exact
+    command: ["df", "-h"]
+    reply_to: admin
+    split_reply: true
+    chunk_size: 1400
+    numbered_chunks: true

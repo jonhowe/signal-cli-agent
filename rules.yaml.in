@@ -1,0 +1,28 @@
+globals:
+  deny_groups: true
+
+  default_timeout_sec: 5
+  default_max_reply_chars: 3500
+  default_split_reply: false
+  default_chunk_size: 1500
+
+  numbered_chunks: false
+
+  default_match: exact
+  default_case_sensitive: false
+
+  default_cooldown_sec: 2
+  default_max_runs_per_hour: 30
+
+  reply_prefix: ""
+  reply_suffix: ""
+  default_reply_to: sender
+  admin: "@PHONE@"
+
+  redact_regex:
+    - "(?i)api[_-]?key\\s*[:=]\\s*\\S+"
+    - "(?i)token\\s*[:=]\\s*\\S+"
+    - "(?i)password\\s*[:=]\\s*\\S+"
+
+# NEW: all rules are loaded from here (in addition to any rules in this file)
+rules_dir: "@REPO@/rules.d"
