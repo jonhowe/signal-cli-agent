@@ -24,5 +24,11 @@ globals:
     - "(?i)token\\s*[:=]\\s*\\S+"
     - "(?i)password\\s*[:=]\\s*\\S+"
 
-# NEW: all rules are loaded from here (in addition to any rules in this file)
+  # NEW: logging + dry-run defaults (CLI flags can override)
+  log_level: "INFO"     # DEBUG|INFO|WARNING|ERROR
+  log_format: "text"    # text|json
+  log_file: ""          # empty => stdout (recommended when using systemd/journalctl)
+  dry_run: false        # if true, commands run but replies are not sent
+
+# all rules are loaded from here (in addition to any optional inline rules)
 rules_dir: "@REPO@/rules.d"
