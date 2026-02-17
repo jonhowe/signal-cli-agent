@@ -217,3 +217,4 @@ rules.d/example-rules.yaml
 rules.d/custody-week.yaml
 .signal_agent_generated.json
 
+.generated-manifest.json
