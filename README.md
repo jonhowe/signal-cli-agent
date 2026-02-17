@@ -48,7 +48,7 @@ Common use cases:
 ```mermaid
 flowchart TD
   A[Your Phone] --> B[Signal Message]
-  B --> C[signal-cli (DBus daemon)]
+  B --> C["signal-cli (DBus daemon)"]
   C --> D[signal-agent.py]
   D --> E[Load rules.yaml]
   D --> F[Load rules.d/*.yaml]
