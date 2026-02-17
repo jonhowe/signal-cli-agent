@@ -15,7 +15,7 @@ Features:
     - sender: ["+1555...", "+1666..."]
 - Matching: exact | contains | startswith | regex
 - Commands: command (argv list) or command_template + args validation
-- Plugins: rule 'type' dispatch (Phase 0: home_assistant read-only)
+- Plugins: rule 'type' dispatch (Phase 0–1: built-in plugins like home_assistant, http_get)
 - Rate limiting: cooldown_sec + max_runs_per_hour per sender+rule
 - Redaction patterns
 - Reply formatting modes:
@@ -53,7 +53,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
-# Plugin support (Phase 0)
+# Plugin support (Phase 0–1)
 from plugins.registry import get_plugin
 
 # Optional imports: only needed in non-test mode

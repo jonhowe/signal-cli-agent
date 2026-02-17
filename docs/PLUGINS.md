@@ -1,454 +1,371 @@
-# Signal CLI Agent — Plugin Architecture Reference
+# Signal CLI Agent — Plugin Reference
 
-This document provides a deep technical reference for the **plugin architecture** in Signal CLI Agent.
+This document is the authoritative reference for the **plugin architecture** in Signal CLI Agent.
 
-It covers:
+It explains:
 
-- Plugin design goals
-- Plugin lifecycle
-- Plugin configuration schema
-- Built-in plugins (Phase 0 / Phase 1)
-- Validation rules
-- Execution flow
-- Safety constraints
-- Safe vs unsafe plugin patterns
+- What plugins are and why they exist
+- How plugin rules are configured
+- The **global HTTP safety controls** used by network-capable plugins
+- Built-in plugins (Phase 0–1)
+- Security and best practices
 
-This is a technical reference document, not a quick-start guide.
+This is a technical reference, not a quick-start guide.
+
+For the rule engine, matching, chunking, and general configuration reference, see:
+
+👉 **[docs/RULES.md](RULES.md)**
 
 ---
 
 # Schema Summary (Quick Reference)
 
-## Rule with Plugin
+## Global Plugin HTTP Defaults (`rules.yaml` → `globals.plugin_http`)
 
 ```yaml
-- name: str
-  sender: str | [str, ...]
-  trigger: str
-  match: exact|contains|startswith|regex
-
-  type: plugin_name
-
-  <plugin_name>:
-    # plugin-specific configuration
-    ...
-
-  timeout_sec: int
-  reply_mode: full|output|bare
-  split_reply: bool
-  chunk_size: int
-  numbered_chunks: bool
-  cooldown_sec: int
-  max_runs_per_hour: int
-  reply_to: sender|admin|number
-  reply_number: str
-  dry_run: bool
+globals:
+  plugin_http:
+    allowed_schemes: ["http", "https"]
+    allowed_hosts: []          # empty => allow all (not recommended)
+    follow_redirects: true     # redirects are validated against allowed_hosts
+    max_response_bytes: 262144 # hard cap per HTTP response
 ```
+
+These values are consumed by plugins that perform HTTP requests (Phase 1 includes `home_assistant` and `http_get`).
 
 ---
 
-## Plugin Result Contract
+## Plugin Rule Shape
 
-Every plugin must return:
+A plugin rule is a normal rule, but uses:
 
-```python
-PluginResult(
-    status="ok" | "error",
-    exit_code=int,
-    body=str,
-    meta=dict
-)
+- `type: <plugin_name>`
+- A plugin-specific config block
+
+Example:
+
+```yaml
+- name: my_rule
+  sender: ["+15551234567"]
+  trigger: "example?"
+  match: exact
+  reply_mode: output
+
+  type: http_get
+  http_get:
+    url: "http://127.0.0.1:8080/health"
 ```
-
-The agent then:
-
-1. Applies redaction
-2. Applies truncation
-3. Applies reply formatting
-4. Applies chunking
-5. Sends response
 
 ---
 
 # Table of Contents
 
-- [1. Design Goals](#1-design-goals)
+- [1. Plugin Concepts](#1-plugin-concepts)
 - [2. Plugin Lifecycle](#2-plugin-lifecycle)
-- [3. Plugin Interface Contract](#3-plugin-interface-contract)
+- [3. Global HTTP Safety Controls](#3-global-http-safety-controls)
 - [4. Built-in Plugins](#4-built-in-plugins)
-  - [4.1 Home Assistant Plugin](#41-home-assistant-plugin)
-  - [4.2 HTTP GET Plugin](#42-http-get-plugin)
-- [5. Configuration Model](#5-configuration-model)
-- [6. Validation Model](#6-validation-model)
-- [7. Execution Model](#7-execution-model)
-- [8. Output Handling](#8-output-handling)
-- [9. Safe vs Unsafe Plugin Patterns](#9-safe-vs-unsafe-plugin-patterns)
-- [10. Security Model](#10-security-model)
+  - [4.1 `home_assistant`](#41-home_assistant)
+  - [4.2 `http_get`](#42-http_get)
+- [5. Security Guidance](#5-security-guidance)
+- [6. Troubleshooting](#6-troubleshooting)
 
 ---
 
-# 1. Design Goals
+# 1. Plugin Concepts
 
-The plugin system exists to:
+Plugins exist to support **API-style rules** without requiring you to:
 
-- Replace shell-based helper scripts for common integrations
-- Standardize HTTP/API access patterns
-- Provide structured validation
-- Reduce injection risk
-- Keep integrations explicit and auditable
-- Avoid persistent background connections unless required
+- write helper scripts for every integration
+- parse JSON in shell commands
+- leak tokens into command lines
 
-Plugins are:
+A plugin is a small Python component that:
 
-- Synchronous
-- Stateless by default
-- Deterministic
-- Narrow in scope
+- validates its configuration (`validate()`)
+- executes a specific integration (`run()`)
+- returns a standardized result object (`PluginResult`)
+
+Plugins are designed for **extensible, structured** integrations.
 
 ---
 
 # 2. Plugin Lifecycle
 
-When a rule includes:
+When a message arrives:
 
-```yaml
-type: home_assistant
-```
+1. The agent reloads configuration if needed.
+2. It scans rules in order.
+3. When a rule matches sender + trigger:
+   - If the rule has `type: <plugin>`:
+     1. The plugin is looked up in the registry.
+     2. `plugin.validate(rule, globals_raw)` is called.
+     3. `plugin.run(rule, globals_raw, context)` is called.
+     4. The plugin returns a `PluginResult`.
+   - The agent formats and sends the reply using the normal `reply_mode` logic.
 
-The agent:
+**First match wins.**
 
-1. Loads configuration
-2. Identifies `type`
-3. Fetches plugin from registry
-4. Calls `plugin.validate(rule, globals)`
-5. If valid, calls `plugin.run(rule, globals, context)`
-6. Receives `PluginResult`
-7. Applies standard formatting + chunking
-8. Sends reply
+Plugins are mutually exclusive with `command` / `command_template`:
 
-If plugin validation fails:
-- The rule is skipped
-- An error is logged
+- If `type:` is present, the agent runs the plugin.
+- If `type:` is absent, the agent runs `command` / `command_template`.
 
 ---
 
-# 3. Plugin Interface Contract
+# 3. Global HTTP Safety Controls
 
-All plugins must implement:
+Network-capable plugins use `globals.plugin_http` as their default safety profile.
 
-```python
-class BasePlugin:
-    name: str
+## 3.1 `allowed_hosts`
 
-    def validate(self, rule: dict, globals_cfg: dict) -> None:
-        pass
+`allowed_hosts` is the primary control that prevents SSRF-style behavior.
 
-    def run(self, rule: dict, globals_cfg: dict, context: dict) -> PluginResult:
-        pass
+```yaml
+globals:
+  plugin_http:
+    allowed_hosts:
+      - "homeassistant.home.lan"
+      - "homeassistant.home.lan:8123"   # optional port pinning
 ```
 
-### `validate()`
+Behavior:
 
-- Ensures required fields exist
-- Ensures types are correct
-- Enforces bounds
-- Raises `ValueError` if invalid
+- If `allowed_hosts` is empty: any host is allowed.
+- If set: the plugin will reject any URL whose hostname (or hostname:port) is not listed.
+- Redirect targets are also validated against `allowed_hosts`.
 
-### `run()`
+## 3.2 `max_response_bytes`
 
-- Performs the integration logic
-- Returns `PluginResult`
-- Must not crash the agent
-- Must handle errors gracefully
+All plugin HTTP responses are capped to avoid unbounded memory usage.
+
+```yaml
+globals:
+  plugin_http:
+    max_response_bytes: 262144
+```
+
+If a response exceeds this size, the plugin returns an error.
+
+## 3.3 `follow_redirects`
+
+Redirect handling is configurable:
+
+```yaml
+globals:
+  plugin_http:
+    follow_redirects: true
+```
+
+- If `true`, redirects are allowed but the redirect URL is still validated.
+- If `false`, any redirect response (30x) is treated as an error.
 
 ---
 
 # 4. Built-in Plugins
 
----
+Phase 0–1 includes two plugins:
 
-## 4.1 Home Assistant Plugin
-
-**Type:** `home_assistant`
-
-### Supported Actions (Phase 0)
-
-- `get_state`
-- `template` (read-only rendering)
+- `home_assistant`
+- `http_get`
 
 ---
 
-### Global Configuration
+## 4.1 `home_assistant`
+
+The `home_assistant` plugin provides **read-only** access patterns for Home Assistant.
+
+Supported actions:
+
+- `get_state` — read an entity via `GET /api/states/<entity_id>`
+- `template` — render a template via `POST /api/template` (read-only, returns text)
+
+### 4.1.1 Global configuration
+
+You can define Home Assistant defaults in `rules.yaml` under `globals.home_assistant`:
 
 ```yaml
 globals:
   home_assistant:
-    url: "http://homeassistant.local:8123"
-    token_file: "/path/to/token"
+    url: "http://homeassistant.home.lan:8123"
+    token_file: "~/.config/signal-cli-agent/ha_token"
     timeout_sec: 4
+    require_private_token_file: true
 ```
 
----
+Notes:
 
-### Rule Example — get_state
+- `token_file` is a plain text file containing a Home Assistant Long-Lived Access Token.
+- Recommended permissions: `chmod 600 ~/.config/signal-cli-agent/ha_token`
+
+### 4.1.2 Rule configuration (`action: get_state`)
+
+Example rule:
 
 ```yaml
-- name: ha_temp
-  sender: "+15551234567"
-  trigger: "temp?"
+- name: ha_week
+  sender: ["+15551234567"]
+  trigger: "what week is it?"
   match: exact
+  reply_mode: output
 
   type: home_assistant
   home_assistant:
     action: get_state
-    entity_id: sensor.example_temperature
-    label: "Temperature"
-
-  reply_mode: output
+    entity_id: sensor.example_week_a_or_b
+    label: "Week"
 ```
 
-Behavior:
+#### Fields
 
-- Performs HTTP GET:
-  ```
-  /api/states/sensor.example_temperature
-  ```
-- Returns sensor state
-- Optional `label` prefixes output
+- `action`: `get_state`
+- `entity_id`: required, must match `domain.object` (example: `sensor.kitchen_temp`)
+- `value` / `json_path`: optional dot-path into the returned JSON (default: `state`)
+  - Examples:
+    - `state` (default)
+    - `attributes.friendly_name`
+    - `attributes.unit_of_measurement`
+- `append_unit`: if `true` and `value/state` is used, appends `attributes.unit_of_measurement`
+- `label`: optional prefix like `"Kitchen Temp"`
+- `strip`: default `true` — trims whitespace
+- `empty_as`: if the value is empty, substitute this string
+- HTTP controls (optional overrides):
+  - `timeout_sec`
+  - `max_response_bytes`
+  - `follow_redirects`
+  - `allowed_hosts`
 
----
+### 4.1.3 Rule configuration (`action: template`)
 
-### Rule Example — template
+Example rule:
 
 ```yaml
-- name: ha_template_example
-  sender: "+15551234567"
-  trigger: "who is home?"
+- name: ha_template
+  sender: ["+15551234567"]
+  trigger: "lights summary?"
   match: exact
+  reply_mode: output
 
   type: home_assistant
   home_assistant:
     action: template
-    template: "{{ states('person.someone') }}"
-    label: "Presence"
+    template: "{{ states('light.kitchen') }}"
+    label: "Kitchen"
 ```
 
-Behavior:
+Notes:
 
-- Performs HTTP POST to `/api/template`
-- Returns rendered string
+- This uses `POST /api/template`, but is considered **read-only** because it only renders a template and returns text.
+- This is still an HTTP request that must pass `allowed_hosts` rules.
+
+### 4.1.4 Security notes
+
+- Use `globals.plugin_http.allowed_hosts` to pin Home Assistant host(s).
+- Keep token files out of the repo.
+- Prefer read-only actions until you have strong validation and sender restrictions.
 
 ---
 
-## 4.2 HTTP GET Plugin
+## 4.2 `http_get`
 
-**Type:** `http_get`
+The `http_get` plugin is a generic read-only GET helper.
 
-Designed for generic read-only endpoints.
+It is useful for:
 
-### Example
+- health checks (`/health`, `/metrics`)
+- reading JSON endpoints
+- lightweight status queries
+
+### 4.2.1 Example: plain text
 
 ```yaml
-- name: service_status
-  sender: "+15551234567"
-  trigger: "status?"
+- name: local_health
+  sender: ["+15551234567"]
+  trigger: "health?"
   match: exact
+  reply_mode: output
 
   type: http_get
   http_get:
-    url: "https://example.com/status"
-    timeout_sec: 3
-    label: "Service"
+    url: "http://127.0.0.1:8080/health"
+    label: "health"
 ```
 
-Optional fields:
+### 4.2.2 Example: JSON + `json_path`
+
+If the endpoint returns JSON:
+
+```json
+{"data": {"value": 123}}
+```
+
+You can extract a specific field:
 
 ```yaml
-http_get:
-  headers:
-    Authorization: "Bearer token"
-  params:
-    foo: bar
-  json_path: "data.value"
+- name: my_value
+  sender: ["+15551234567"]
+  trigger: "value?"
+  match: exact
+  reply_mode: output
+
+  type: http_get
+  http_get:
+    url: "http://127.0.0.1:8080/status"
+    json_path: "data.value"
+    label: "value"
 ```
 
-If `json_path` provided:
-- Parses JSON
-- Extracts nested field using dot notation (`a.b.c`)
-- Supports list indices when a segment is numeric (`items.0.name`)
+### 4.2.3 Fields
+
+- `url`: required
+- `headers`: optional mapping
+- `params`: optional mapping (merged into the URL query string)
+- `json_path`: optional dot-path into response JSON
+- `label`, `strip`, `empty_as`
+- HTTP controls (optional overrides):
+  - `timeout_sec`
+  - `max_response_bytes`
+  - `follow_redirects`
+  - `allowed_hosts`
 
 ---
 
-# 5. Configuration Model
+# 5. Security Guidance
 
-Plugin configuration is layered:
+Plugins reduce the need for shell scripts, but they introduce their own risks.
 
-1. `globals.<plugin_name>` (default config)
-2. `rule.<plugin_name>` (rule overrides)
+Recommendations:
 
-Merge behavior:
-
-```
-rule config overrides globals config
-```
-
-Example:
-
-```yaml
-globals:
-  home_assistant:
-    url: "http://ha.local"
-    token_file: "/secure/token"
-
-rule:
-  home_assistant:
-    action: get_state
-    entity_id: sensor.foo
-```
+1. **Always restrict senders** (`sender: ["+15551234567"]`).
+2. **Pin allowed hosts** using `globals.plugin_http.allowed_hosts`.
+3. Keep `max_response_bytes` small.
+4. Avoid rules that accept user-provided URLs or arbitrary paths.
+5. Store secrets in files with strict permissions (`chmod 600`).
 
 ---
 
-# 6. Validation Model
+# 6. Troubleshooting
 
-Plugins must:
+## “URL host not in allowed_hosts”
 
-- Validate required fields
-- Enforce safe bounds
-- Reject unknown actions
-- Enforce timeouts within safe range
+Your global `allowed_hosts` is set and the plugin URL does not match.
 
-Validation occurs before execution.
+Fix by adding the host (optionally with port) to `globals.plugin_http.allowed_hosts`.
 
-Invalid plugin config:
+## “token file permissions too open”
 
-- Logs error
-- Skips rule
-- Does not crash agent
+Your Home Assistant token file should not be readable by group/others.
 
----
+Fix:
 
-# 7. Execution Model
-
-Execution flow:
-
-1. Rate limit check
-2. Plugin validate
-3. Plugin run
-4. Receive PluginResult
-5. Redaction applied
-6. Truncation applied
-7. Reply formatting applied
-8. Chunking applied
-9. Response sent
-
-Plugins never bypass global formatting behavior.
-
----
-
-# 8. Output Handling
-
-Plugins return a clean `body` string.
-
-Agent then applies:
-
-- `redact_regex`
-- `max_reply_chars`
-- `reply_mode`
-- `split_reply`
-- `numbered_chunks`
-
-Plugins should not implement their own chunking.
-
----
-
-# 9. Safe vs Unsafe Plugin Patterns
-
----
-
-## SAFE Pattern — Static Home Assistant Read
-
-```yaml
-type: home_assistant
-home_assistant:
-  action: get_state
-  entity_id: sensor.foo
+```sh
+chmod 600 ~/.config/signal-cli-agent/ha_token
 ```
 
-Safe because:
-- Read-only
-- Fixed entity
-- No user input interpolation
+## “response exceeded max_response_bytes”
 
----
+The endpoint returned more data than allowed.
 
-## SAFE Pattern — Validated Template
+Fix by:
 
-```yaml
-type: home_assistant
-home_assistant:
-  action: template
-  template: "{{ states('sensor.foo') }}"
-```
-
-Safe because:
-- Static template
-- No user-provided content
-
----
-
-## UNSAFE Pattern — Dynamic Template from Message
-
-```yaml
-trigger: "^run (.*)$"
-match: regex
-
-type: home_assistant
-home_assistant:
-  action: template
-  template: "{{ states('{input}') }}"
-```
-
-Why unsafe:
-- Injects user input into template
-- Could expose unintended data
-
-Avoid dynamic template interpolation unless strongly validated.
-
----
-
-## UNSAFE Pattern — Arbitrary HTTP GET
-
-```yaml
-type: http_get
-http_get:
-  url: "{user_input}"
-```
-
-Never allow user-controlled URLs.
-
----
-
-# 10. Security Model
-
-Plugins improve safety by:
-
-- Avoiding shell execution
-- Enforcing schema validation
-- Centralizing HTTP handling
-- Providing consistent timeout enforcement
-
-User responsibilities:
-
-- Restrict senders
-- Avoid dynamic user-controlled URLs
-- Avoid dynamic template construction
-- Store tokens securely (`chmod 600`)
-- Review plugin rules carefully before enabling
-
----
-
-This document defines the plugin system contract.
-
-For rule structure and core agent behavior, see:
-
-👉 **docs/RULES.md**
+- increasing `globals.plugin_http.max_response_bytes`, or
+- adjusting the endpoint to return less data
