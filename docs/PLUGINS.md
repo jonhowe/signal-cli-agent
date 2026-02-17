@@ -274,7 +274,8 @@ http_get:
 
 If `json_path` provided:
 - Parses JSON
-- Extracts nested field using dot notation
+- Extracts nested field using dot notation (`a.b.c`)
+- Supports list indices when a segment is numeric (`items.0.name`)
 
 ---
 

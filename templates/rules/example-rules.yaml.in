@@ -96,3 +96,49 @@ rules:
   #   match: exact
   #   command: ["whoami"]
   #   reply_mode: output
+
+  # --------------------------------------------------
+  # 6) Plugin examples (disabled by default)
+  # --------------------------------------------------
+  #
+  # These examples show how to use the Phase 0 plugin interface for
+  # read-only API calls.
+  #
+  # See:
+  #   - docs/PLUGINS.md
+  #   - docs/RULES.md
+  #
+  # Example: Home Assistant sensor read
+  #
+  # - name: ha_sensor_example
+  #   sender:
+  #     - "@PHONE@"
+  #   trigger: "sensor?"
+  #   match: exact
+  #
+  #   type: home_assistant
+  #   home_assistant:
+  #     action: get_state
+  #     url: "http://homeassistant.local:8123"        # or set globals.home_assistant.url in rules.yaml
+  #     token_file: "~/.config/signal-agent/ha_token" # or set globals.home_assistant.token_file in rules.yaml
+  #     entity_id: "sensor.example"
+  #     label: "Sensor"
+  #
+  #   reply_mode: output
+  #   split_reply: false
+  #
+  # Example: Generic HTTP GET
+  #
+  # - name: status_endpoint
+  #   sender:
+  #     - "@PHONE@"
+  #   trigger: "status?"
+  #   match: exact
+  #
+  #   type: http_get
+  #   http_get:
+  #     url: "https://example.com/status"
+  #     label: "Status"
+  #
+  #   reply_mode: output
+  #   split_reply: false

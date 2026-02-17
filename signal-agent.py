@@ -662,17 +662,19 @@ class SignalAgent:
                     result = plugin.run(rule, globals_raw, ctx)
                     dt = now_ts() - t0
 
+                    # Best-effort: if the plugin config includes an "action" field (like home_assistant),
+                    # include it in the display string.
                     action = ""
                     try:
-                        # common pattern: rule.<plugin_name>.action
-                        block = rule.get(plugin_type) or rule.get("home_assistant") or {}
-                        action = str(block.get("action", "")).strip()
+                        block = rule.get(plugin_type) or {}
+                        if isinstance(block, dict):
+                            action = str(block.get("action", "")).strip()
                     except Exception:
                         action = ""
 
                     display_cmd = f"plugin:{plugin_type}" + (f".{action}" if action else "")
-                    exit_code = int(result.exit_code or 0)
-                    out = result.body or ""
+                    exit_code = int(getattr(result, "exit_code", 0) or 0)
+                    out = str(getattr(result, "body", "") or "")
 
                     log_info(f"↳ rule matched: {rule_name} -> {display_cmd} (t={dt:.2f}s exit={exit_code})")
 
@@ -815,10 +817,18 @@ def run_test_mode(rules_path: Path, sender: str, message: str, dry_run: bool) ->
                 }
 
                 result = plugin.run(rule, globals_raw, ctx)
-                exit_code = int(result.exit_code or 0)
-                out = result.body or ""
+                exit_code = int(getattr(result, "exit_code", 0) or 0)
+                out = str(getattr(result, "body", "") or "")
 
-                display_cmd = f"plugin:{plugin_type}"
+                action = ""
+                try:
+                    block = rule.get(plugin_type) or {}
+                    if isinstance(block, dict):
+                        action = str(block.get("action", "")).strip()
+                except Exception:
+                    action = ""
+
+                display_cmd = f"plugin:{plugin_type}" + (f".{action}" if action else "")
                 log_info(f"[TEST] matched plugin rule: {rule_name} -> {display_cmd}")
 
             else:
