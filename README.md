@@ -6,26 +6,7 @@ It allows you to securely trigger commands on a host using Signal as the control
 
 ---
 
-# Table of Contents
-
-- [1. Overview](#1-overview)
-- [2. Why This Exists](#2-why-this-exists)
-- [3. Architecture](#3-architecture)
-- [4. Installation](#4-installation)
-- [5. Project Structure](#5-project-structure)
-- [6. Writing Rules](#6-writing-rules)
-- [7. Output & Formatting](#7-output--formatting)
-- [8. Operating Modes](#8-operating-modes)
-- [9. Maintenance](#9-maintenance)
-- [10. Troubleshooting](#10-troubleshooting)
-- [11. FAQ](#11-faq)
-- [12. Roadmap](#12-roadmap)
-- [13. Appendix: Rule Parameter Reference](#13-appendix-rule-parameter-reference)
-- [14. Security Considerations](#14-security-considerations)
-
----
-
-# 1. Overview
+# Overview
 
 Signal CLI Agent:
 
@@ -34,33 +15,35 @@ Signal CLI Agent:
 - Executes local commands safely
 - Sends results back via Signal
 
-It is intentionally minimal, explicit, and extensible.
+Rules are defined in YAML files and can be extended without modifying the core code.
+
+For the full rule schema and configuration reference, see:
+
+👉 **[docs/RULES.md](docs/RULES.md)**
 
 ---
 
-# 2. Why This Exists
+# Why Use This?
 
 Instead of exposing:
 
 - SSH access
-- A web interface
-- A public REST API
+- A web server
+- A public API
 
-You can use Signal as a secure, authenticated command interface.
+You can use Signal as a secure, authenticated automation interface.
 
-Typical use cases:
+Common use cases:
 
 - System diagnostics
 - Log inspection
 - Service health checks
-- API status queries
 - Lightweight automation
+- API status queries
 
 ---
 
-# 3. Architecture
-
-## 3.1 Mental Model
+# Architecture
 
 ```mermaid
 flowchart TD
@@ -70,25 +53,15 @@ flowchart TD
   D --> E[Load rules.yaml]
   D --> F[Load rules.d/*.yaml]
   D --> G[Match sender + trigger]
-  D --> H[Validate arguments]
-  D --> I[Execute command]
-  D --> J[Format + redact output]
-  J --> K[Send response via Signal]
+  D --> H[Execute command]
+  D --> I[Send response via Signal]
 ```
-
-## 3.2 Key Properties
-
-- No shell string execution (`shell=True` is not used)
-- Explicit argv-style commands
-- Per-rule rate limiting
-- Safe regex argument validation
-- Automatic rule reloading
 
 ---
 
-# 4. Installation
+# Installation
 
-## 4.1 Prerequisites
+## Prerequisites
 
 ### Install `signal-cli`
 
@@ -98,27 +71,36 @@ https://github.com/AsamK/signal-cli
 
 Register and verify your Signal number.
 
-### Install Python dependencies
+### Install Python Dependencies
 
 ```sh
 pip install pydbus pyyaml
 sudo apt install python3-gi
 ```
 
+Requirements:
+
+- Python 3.10+
+- pydbus
+- PyYAML
+- python3-gi
+
 ---
 
-## 4.2 Quick Setup
+## Quick Start (Recommended)
+
+From the repository root:
 
 ```sh
 make quickstart
 ```
 
-This:
+This will:
 
-1. Runs `configure.py`
-2. Renders templates
-3. Installs systemd user services
-4. Starts the services
+1. Run `configure.py`
+2. Render configuration templates
+3. Install systemd user services
+4. Start both services
 
 Verify:
 
@@ -129,7 +111,11 @@ make logs
 
 ---
 
-## 4.3 Boot-Time Startup (Optional)
+## Boot-Time Startup (Optional)
+
+User services normally start when you log in.
+
+To allow them to start at boot:
 
 ```sh
 sudo loginctl enable-linger <your-username>
@@ -137,74 +123,33 @@ sudo loginctl enable-linger <your-username>
 
 ---
 
-# 5. Project Structure
+# Writing Rules
+
+Production rules live in:
 
 ```
-templates/        → shipped templates (source-of-truth)
-rules.d/          → production rules (user-managed)
-systemd/          → rendered service files
-rules.yaml        → generated root config
+rules.d/
 ```
 
-- `templates/` contains files the project ships.
-- `rules.d/` is your working rule directory.
-- `make clean` never deletes custom rules.
+You may add your own `.yaml` files there.
+
+Shipped example rules are rendered from:
+
+```
+templates/rules/
+```
+
+For detailed rule structure and all supported parameters:
+
+👉 **See `docs/RULES.md`**
 
 ---
 
-# 6. Writing Rules
+# Operating Modes
 
-## 6.1 Minimal Example
+## Service Mode
 
-```yaml
-- name: disk_usage
-  sender: "+15551234567"
-  trigger: "disk?"
-  match: exact
-  command: ["df", "-h"]
-  reply_mode: output
-```
-
-## 6.2 Regex + Argument Validation
-
-```yaml
-- name: tail_logs
-  sender: "+15551234567"
-  trigger: "^tail (\\d+)$"
-  match: regex
-  command_template: ["journalctl", "-n", "{n}"]
-  args:
-    n:
-      type: int
-      min: 1
-      max: 200
-```
-
----
-
-# 7. Output & Formatting
-
-## 7.1 Reply Modes
-
-| Mode     | Behavior |
-|----------|----------|
-| full     | `[rule] exit=0` + command + output |
-| output   | `[rule]` + output |
-| bare     | output only |
-
-## 7.2 Chunking Large Output
-
-```yaml
-split_reply: true
-chunk_size: 1400
-numbered_chunks: true
-```
-
----
-
-# 8. Operating Modes
-
-## 8.1 Service Mode
+Recommended for normal use:
 
 ```sh
 make quickstart
@@ -219,36 +164,46 @@ make restart
 make stop
 ```
 
-## 8.2 Manual Mode
+---
+
+## Manual Mode
+
+Start DBus daemon:
 
 ```sh
 signal-cli -a +15551234567 daemon --dbus
+```
+
+Run agent:
+
+```sh
 python3 signal-agent.py ./rules.yaml
 ```
 
-## 8.3 Dry Run
+---
+
+## Test Mode
+
+Simulate a message locally (no Signal send):
 
 ```sh
-python3 signal-agent.py ./rules.yaml --dry-run
-```
-
-## 8.4 Test Mode
-
-```sh
-python3 signal-agent.py ./rules.yaml --test \
+python3 signal-agent.py ./rules.yaml \
+  --test \
   --sender "+15551234567" \
   --message "disk?"
 ```
 
 ---
 
-# 9. Maintenance
+# Maintenance
 
-## Remove Installed Services
+## Uninstall Services
 
 ```sh
 make uninstall
 ```
+
+Removes installed user units only.
 
 ## Remove Generated Files
 
@@ -256,207 +211,57 @@ make uninstall
 make clean
 ```
 
-Custom rules remain untouched.
+Removes generated configuration and shipped example rule.
+
+Custom rules in `rules.d/` remain untouched.
 
 ---
 
-# 10. Troubleshooting
+# FAQ
 
-### Service Not Starting
+### Do I need to restart after editing rules?
 
-```sh
-make status
-journalctl --user -u signal-agent.service
-```
+No. Rules are automatically reloaded.
 
-### No Replies
+### Can I allow multiple senders?
 
-- Verify sender
-- Ensure `signal-cli` is running
-- Check `dry_run`
-- Review logs
+Yes. See `docs/RULES.md`.
 
-### Regex Not Matching
+### What if multiple rules match?
 
-Escape properly in YAML:
+The first matching rule executes.
 
-```
-\\d+
-```
+### Can I call APIs?
+
+Yes. Use helper scripts referenced in `command:`.
+
+Full examples are documented in `docs/RULES.md`.
 
 ---
 
-# 11. FAQ
+# Roadmap
 
-**Do I need to restart after editing rules?**  
-No. Rules auto-reload.
+Planned improvements:
 
-**What if multiple rules match?**  
-First match wins.
-
-**Can I allow multiple senders?**  
-Yes — use a list.
-
-**Are custom rules deleted during uninstall?**  
-No.
+- Plugin architecture for structured rule types
+- Docker deployment option
+- Role-based access control
+- Metrics and enhanced logging
 
 ---
 
-# 12. Roadmap
-
-### Plugin Architecture
-Introduce structured rule types like:
-
-- `type: http_get`
-- `type: home_assistant`
-- `type: systemd_status`
-
-### Docker Deployment
-Provide containerized deployment.
-
-### Role-Based Access Control
-Define `admin`, `readonly`, etc.
-
-### Metrics & Structured Logging
-Optional Prometheus endpoint and JSON logging improvements.
-
----
-
-# 13. Appendix: Rule Parameter Reference
-
-This section documents all supported rule parameters.
-
----
-
-## Core Fields
-
-### `name`
-Unique rule identifier.
-
-### `sender`
-Allowed sender(s).
-
-String:
-
-```yaml
-sender: "+15551234567"
-```
-
-List:
-
-```yaml
-sender:
-  - "+15551234567"
-  - "+15557654321"
-```
-
----
-
-### `trigger`
-Message text or regex pattern.
-
----
-
-### `match`
-Matching mode:
-
-- exact
-- contains
-- startswith
-- regex
-
----
-
-### `command`
-Direct command (argv list).
-
-```yaml
-command: ["ls", "-lah", "/home/user"]
-```
-
----
-
-### `command_template`
-Parameterized command with placeholders.
-
-```yaml
-command_template: ["journalctl", "-n", "{n}"]
-```
-
----
-
-### `args`
-Validation rules for regex capture groups.
-
-```yaml
-args:
-  n:
-    type: int
-    min: 1
-    max: 200
-```
-
----
-
-### `reply_mode`
-- full
-- output
-- bare
-
----
-
-### `reply_prefix` / `reply_suffix`
-Custom wrapper text.
-
----
-
-### `split_reply`
-Boolean. Enable chunking.
-
----
-
-### `chunk_size`
-Maximum characters per chunk.
-
----
-
-### `numbered_chunks`
-Adds `[rule message i/n]` prefix if multiple chunks.
-
----
-
-### `cooldown_sec`
-Minimum time between executions.
-
----
-
-### `max_runs_per_hour`
-Rate limiting cap.
-
----
-
-### `reply_to`
-- sender
-- admin
-
----
-
-### `dry_run`
-Suppress reply sending.
-
----
-
-# 14. Security Considerations
+# Security Notes
 
 This system executes local commands triggered by Signal messages.
 
-Best practices:
+You should:
 
-- Restrict senders
-- Use strict matching
-- Validate inputs
-- Limit execution frequency
-- Store secrets securely
-- Run as non-root
+- Restrict allowed senders
+- Validate inputs carefully
+- Use rate limiting
+- Avoid committing secrets
+- Run as a non-root user
 
-Treat it as controlled automation infrastructure.
+For detailed configuration and safety guidance, see:
+
+👉 **`docs/RULES.md`**
