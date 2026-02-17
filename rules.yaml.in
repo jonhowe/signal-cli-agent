@@ -1,4 +1,5 @@
 globals:
+  # --- Core safety defaults ---
   deny_groups: true
 
   default_timeout_sec: 5
@@ -17,6 +18,8 @@ globals:
   reply_prefix: ""
   reply_suffix: ""
   default_reply_to: sender
+
+  # NOTE: configure.py injects @PHONE@ here.
   admin: "@PHONE@"
 
   redact_regex:
@@ -24,11 +27,24 @@ globals:
     - "(?i)token\\s*[:=]\\s*\\S+"
     - "(?i)password\\s*[:=]\\s*\\S+"
 
-  # NEW: logging + dry-run defaults (CLI flags can override)
-  log_level: "INFO"     # DEBUG|INFO|WARNING|ERROR
-  log_format: "text"    # text|json
-  log_file: ""          # empty => stdout (recommended when using systemd/journalctl)
-  dry_run: false        # if true, commands run but replies are not sent
+  # --- Plugins: shared HTTP safety defaults (Phase 1) ---
+  # These apply to plugins that make HTTP requests (home_assistant, http_get, ...)
+  #
+  # Recommended:
+  # - Set allowed_hosts to the specific host(s) your plugins may contact.
+  # - Keep max_response_bytes modest unless you explicitly need larger responses.
+  plugin_http:
+    allowed_schemes: ["http", "https"]
+    allowed_hosts: []          # e.g. ["homeassistant.home.lan", "homeassistant.home.lan:8123"]
+    follow_redirects: true     # redirects are validated against allowed_hosts
+    max_response_bytes: 262144 # 256 KiB
 
-# all rules are loaded from here (in addition to any optional inline rules)
+  # --- Plugin: Home Assistant (optional global defaults) ---
+  # home_assistant:
+  #   url: "http://homeassistant.home.lan:8123"
+  #   token_file: "~/.config/signal-cli-agent/ha_token"
+  #   timeout_sec: 4
+  #   require_private_token_file: true
+
+# NEW: all rules are loaded from here (in addition to any rules in this file)
 rules_dir: "@REPO@/rules.d"

@@ -15,6 +15,7 @@ Features:
     - sender: ["+1555...", "+1666..."]
 - Matching: exact | contains | startswith | regex
 - Commands: command (argv list) or command_template + args validation
+- Plugins: rule 'type' dispatch (Phase 0–1: built-in plugins like home_assistant, http_get)
 - Rate limiting: cooldown_sec + max_runs_per_hour per sender+rule
 - Redaction patterns
 - Reply formatting modes:
@@ -51,6 +52,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
+
+# Plugin support (Phase 0–1)
+from plugins.registry import get_plugin
 
 # Optional imports: only needed in non-test mode
 try:
@@ -347,7 +351,7 @@ class GlobalsCfg:
 
     redact_regex: List[str] = None  # type: ignore
 
-    # NEW: logging & dry-run defaults (can be overridden by CLI)
+    # Logging & dry-run defaults (can be overridden by CLI)
     log_level: str = "INFO"
     log_format: str = "text"   # text|json
     log_file: str = ""         # empty => stdout
@@ -396,15 +400,14 @@ class ConfigLoader:
       - rules: [...]                 (optional; inline rules)
 
     Then loads rules from each *.yaml/*.yml file in rules_dir.
-    Supports file formats in rules.d:
-      1) {rules: [ ... ]}
-      2) [ ... ]  (list of rules)
-      3) {name: ..., trigger: ...} (single rule)
     """
     def __init__(self, root_path: Path) -> None:
         self.root_path = root_path
         self._mtimes: Dict[Path, float] = {}
+
         self.globals_cfg: GlobalsCfg = GlobalsCfg()
+        self.globals_raw: Dict[str, Any] = {}   # NEW: raw globals dict for plugins
+
         self.rules_dir: Optional[Path] = None
         self.rules: List[Dict[str, Any]] = []
 
@@ -420,9 +423,10 @@ class ConfigLoader:
         if not self.root_path.exists():
             raise FileNotFoundError(f"Rules file not found: {self.root_path}")
 
-        # Load root file to find globals + rules_dir
         root_data = self._load_yaml_file(self.root_path)
+
         globals_dict = root_data.get("globals", {}) or {}
+        self.globals_raw = dict(globals_dict)  # NEW: store raw for plugins
         self.globals_cfg = GlobalsCfg.from_dict(globals_dict)
 
         rules_dir_val = root_data.get("rules_dir")
@@ -436,7 +440,6 @@ class ConfigLoader:
         files_to_check = [self.root_path] + rule_files
         changed = False
 
-        # Detect changes (any file mtime changes)
         for p in files_to_check:
             try:
                 m = p.stat().st_mtime
@@ -451,12 +454,10 @@ class ConfigLoader:
 
         merged_rules: List[Dict[str, Any]] = []
 
-        # Optional inline rules from root file
         root_rules = root_data.get("rules")
         if isinstance(root_rules, list):
             merged_rules.extend(root_rules)
 
-        # rules.d/*.yaml
         for rf in rule_files:
             data = self._load_yaml_file(rf)
             if isinstance(data, dict) and "rules" in data and isinstance(data["rules"], list):
@@ -466,7 +467,6 @@ class ConfigLoader:
             elif isinstance(data, dict) and "name" in data:
                 merged_rules.append(data)
 
-        # Update mtimes cache
         self._mtimes = {}
         for p in files_to_check:
             try:
@@ -509,12 +509,6 @@ def build_reply(
 
 
 def sender_allowed(rule_sender: Any, actual_sender: str) -> bool:
-    """
-    Supports:
-      sender: "+1555"
-      sender: ["+1555", "+1666"]
-      sender: "" / missing => allow all senders (caller must handle global allowlists if added later)
-    """
     if rule_sender is None:
         return True
     if isinstance(rule_sender, (list, tuple)):
@@ -549,13 +543,10 @@ class SignalAgent:
 
         self.rules_loader.load_if_changed()
 
-        # Subscribe (pydbus maps to onX attributes)
         self.signal.onMessageReceived = self.on_message_received
         self.signal.onMessageReceivedV2 = self.on_message_received_v2
         self.signal.onSyncMessageReceived = self.on_sync_message_received
         self.signal.onSyncMessageReceivedV2 = self.on_sync_message_received_v2
-
-    # --- Signal handlers ---
 
     def on_message_received(self, timestamp: int, sender: str, group_id: Any, message: str, attachments: Any) -> None:
         self.handle_incoming("msg", timestamp, sender, None, group_id, message)
@@ -568,8 +559,6 @@ class SignalAgent:
 
     def on_sync_message_received_v2(self, timestamp: int, sender: str, destination: str, group_id: Any, message: str, attachments: Any, options: Any = None) -> None:
         self.handle_incoming("syncv2", timestamp, sender, destination, group_id, message)
-
-    # --- Core processing ---
 
     def maybe_send(self, target: str, payload: str, dry_run: bool) -> None:
         if dry_run or self.global_dry_run:
@@ -585,6 +574,7 @@ class SignalAgent:
             return
 
         g = self.rules_loader.globals_cfg
+        globals_raw = self.rules_loader.globals_raw  # NEW
 
         is_group = looks_like_group_id(group_id)
         if is_group and g.deny_groups:
@@ -598,7 +588,6 @@ class SignalAgent:
             try:
                 rule_name = str(rule.get("name", "unnamed"))
 
-                # Sender check (single or list)
                 if not sender_allowed(rule.get("sender"), sender):
                     continue
 
@@ -612,7 +601,6 @@ class SignalAgent:
                 if not matched:
                     continue
 
-                # Rate limiting
                 cooldown_sec = safe_int(rule.get("cooldown_sec", g.default_cooldown_sec), g.default_cooldown_sec)
                 max_runs_per_hour = safe_int(rule.get("max_runs_per_hour", g.default_max_runs_per_hour), g.default_max_runs_per_hour)
                 ok, why = self.rate_limiter.allow(sender, rule_name, cooldown_sec, max_runs_per_hour)
@@ -620,46 +608,7 @@ class SignalAgent:
                     log_warn(f"↳ rule matched but blocked: {rule_name} ({why})")
                     continue
 
-                # Build command
-                if "command" in rule:
-                    cmd = list(rule.get("command") or [])
-                else:
-                    template = list(rule.get("command_template") or [])
-                    if not template:
-                        continue
-                    args_schema = dict(rule.get("args") or {})
-                    values: Dict[str, Any] = {}
-                    if args_schema:
-                        if not mobj:
-                            raise ValueError("args schema provided but regex match object missing")
-                        values = validate_args_from_match(args_schema, mobj)
-                    cmd = render_command_template(template, values)
-
-                display_cmd = " ".join(shlex.quote(c) for c in cmd)
-                timeout_sec = safe_int(rule.get("timeout_sec", g.default_timeout_sec), g.default_timeout_sec)
-
-                log_info(f"↳ rule matched: {rule_name} -> running: {display_cmd}")
-
-                completed = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout_sec,
-                    check=False,
-                )
-
-                stdout = completed.stdout or ""
-                stderr = completed.stderr or ""
-                exit_code = completed.returncode
-
-                out = stdout
-                if stderr.strip():
-                    out = out.rstrip("\n") + ("\n\n[stderr]\n" + stderr)
-
-                out = apply_redactions(out, g.redact_regex)
-                out = shorten(out, safe_int(rule.get("max_reply_chars", g.default_max_reply_chars), g.default_max_reply_chars))
-
-                # Reply target routing
+                # Reply routing
                 reply_to = str(rule.get("reply_to", g.default_reply_to)).strip().lower()
                 if reply_to == "sender":
                     target = sender
@@ -670,10 +619,105 @@ class SignalAgent:
                 else:
                     target = sender
 
-                # Reply formatting
+                # Dry-run
+                rule_dry_run = bool(rule.get("dry_run", False))
+                effective_dry_run = rule_dry_run or self.global_dry_run or g.dry_run
+
+                # Reply formatting controls
                 reply_prefix = str(rule.get("reply_prefix", g.reply_prefix))
                 reply_suffix = str(rule.get("reply_suffix", g.reply_suffix))
                 reply_mode = str(rule.get("reply_mode", "full")).strip().lower()
+
+                # Split behavior
+                split_reply = bool(rule.get("split_reply", g.default_split_reply))
+                chunk_size = safe_int(rule.get("chunk_size", g.default_chunk_size), g.default_chunk_size)
+                numbered_chunks = bool(rule.get("numbered_chunks", g.numbered_chunks))
+
+                # ---- NEW: Plugin dispatch (Phase 0) ----
+                plugin_type = str(rule.get("type", "")).strip().lower()
+                if plugin_type:
+                    plugin = get_plugin(plugin_type)
+                    if not plugin:
+                        log_err(f"↳ rule matched but unknown plugin type: {rule_name} type={plugin_type}")
+                        return
+
+                    # Validate plugin config (fail fast)
+                    try:
+                        plugin.validate(rule, globals_raw)
+                    except Exception as ve:
+                        log_err(f"↳ plugin config invalid for rule {rule_name}: {ve}")
+                        return
+
+                    ctx = {
+                        "kind": kind,
+                        "timestamp_ms": timestamp_ms,
+                        "sender": sender,
+                        "destination": destination,
+                        "message": message,
+                        "rule_name": rule_name,
+                        "match_obj": mobj,
+                    }
+
+                    t0 = now_ts()
+                    result = plugin.run(rule, globals_raw, ctx)
+                    dt = now_ts() - t0
+
+                    # Best-effort: if the plugin config includes an "action" field (like home_assistant),
+                    # include it in the display string.
+                    action = ""
+                    try:
+                        block = rule.get(plugin_type) or {}
+                        if isinstance(block, dict):
+                            action = str(block.get("action", "")).strip()
+                    except Exception:
+                        action = ""
+
+                    display_cmd = f"plugin:{plugin_type}" + (f".{action}" if action else "")
+                    exit_code = int(getattr(result, "exit_code", 0) or 0)
+                    out = str(getattr(result, "body", "") or "")
+
+                    log_info(f"↳ rule matched: {rule_name} -> {display_cmd} (t={dt:.2f}s exit={exit_code})")
+
+                else:
+                    # ---- Existing: command / command_template ----
+                    if "command" in rule:
+                        cmd = list(rule.get("command") or [])
+                    else:
+                        template = list(rule.get("command_template") or [])
+                        if not template:
+                            continue
+                        args_schema = dict(rule.get("args") or {})
+                        values: Dict[str, Any] = {}
+                        if args_schema:
+                            if not mobj:
+                                raise ValueError("args schema provided but regex match object missing")
+                            values = validate_args_from_match(args_schema, mobj)
+                        cmd = render_command_template(template, values)
+
+                    display_cmd = " ".join(shlex.quote(c) for c in cmd)
+                    timeout_sec = safe_int(rule.get("timeout_sec", g.default_timeout_sec), g.default_timeout_sec)
+
+                    log_info(f"↳ rule matched: {rule_name} -> running: {display_cmd}")
+
+                    completed = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout_sec,
+                        check=False,
+                    )
+
+                    stdout = completed.stdout or ""
+                    stderr = completed.stderr or ""
+                    exit_code = completed.returncode
+
+                    out = stdout
+                    if stderr.strip():
+                        out = out.rstrip("\n") + ("\n\n[stderr]\n" + stderr)
+
+                # Common post-processing: redact + truncate
+                out = apply_redactions(out, g.redact_regex)
+                out = shorten(out, safe_int(rule.get("max_reply_chars", g.default_max_reply_chars), g.default_max_reply_chars))
 
                 reply = build_reply(
                     rule_name=rule_name,
@@ -685,16 +729,7 @@ class SignalAgent:
                     reply_suffix=reply_suffix,
                 )
 
-                # Split behavior
-                split_reply = bool(rule.get("split_reply", g.default_split_reply))
-                chunk_size = safe_int(rule.get("chunk_size", g.default_chunk_size), g.default_chunk_size)
-                numbered_chunks = bool(rule.get("numbered_chunks", g.numbered_chunks))
-
-                # Dry-run: rule-level overrides global default
-                rule_dry_run = bool(rule.get("dry_run", False))
-                effective_dry_run = rule_dry_run or self.global_dry_run or g.dry_run
-
-                # Send reply
+                # Send reply (with chunking if configured)
                 try:
                     if split_reply and chunk_size > 0 and len(reply) > chunk_size:
                         parts = [p for p in split_chunks_by_lines(reply, chunk_size) if p]
@@ -731,13 +766,10 @@ class SignalAgent:
 # -----------------------------
 
 def run_test_mode(rules_path: Path, sender: str, message: str, dry_run: bool) -> int:
-    """
-    Loads rules and simulates evaluation/execution locally.
-    Prints the exact reply that would be sent (or notes dry-run).
-    """
     loader = ConfigLoader(rules_path)
     loader.load_if_changed()
     g = loader.globals_cfg
+    globals_raw = loader.globals_raw
     rate_limiter = RateLimiter()
 
     log_info(f"[TEST] rules={rules_path}")
@@ -766,41 +798,75 @@ def run_test_mode(rules_path: Path, sender: str, message: str, dry_run: bool) ->
                 log_warn(f"[TEST] matched but rate-limited: {rule_name} ({why})")
                 continue
 
-            if "command" in rule:
-                cmd = list(rule.get("command") or [])
-            else:
-                template = list(rule.get("command_template") or [])
-                if not template:
+            plugin_type = str(rule.get("type", "")).strip().lower()
+            if plugin_type:
+                plugin = get_plugin(plugin_type)
+                if not plugin:
+                    log_err(f"[TEST] unknown plugin type: {plugin_type}")
                     continue
-                args_schema = dict(rule.get("args") or {})
-                values: Dict[str, Any] = {}
-                if args_schema:
-                    if not mobj:
-                        raise ValueError("args schema provided but regex match object missing")
-                    values = validate_args_from_match(args_schema, mobj)
-                cmd = render_command_template(template, values)
+                plugin.validate(rule, globals_raw)
 
-            display_cmd = " ".join(shlex.quote(c) for c in cmd)
-            timeout_sec = safe_int(rule.get("timeout_sec", g.default_timeout_sec), g.default_timeout_sec)
+                ctx = {
+                    "kind": "test",
+                    "timestamp_ms": int(now_ts() * 1000),
+                    "sender": sender,
+                    "destination": None,
+                    "message": message,
+                    "rule_name": rule_name,
+                    "match_obj": mobj,
+                }
 
-            log_info(f"[TEST] matched rule: {rule_name}")
-            log_info(f"[TEST] would run: {display_cmd}")
+                result = plugin.run(rule, globals_raw, ctx)
+                exit_code = int(getattr(result, "exit_code", 0) or 0)
+                out = str(getattr(result, "body", "") or "")
 
-            completed = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout_sec,
-                check=False,
-            )
+                action = ""
+                try:
+                    block = rule.get(plugin_type) or {}
+                    if isinstance(block, dict):
+                        action = str(block.get("action", "")).strip()
+                except Exception:
+                    action = ""
 
-            stdout = completed.stdout or ""
-            stderr = completed.stderr or ""
-            exit_code = completed.returncode
+                display_cmd = f"plugin:{plugin_type}" + (f".{action}" if action else "")
+                log_info(f"[TEST] matched plugin rule: {rule_name} -> {display_cmd}")
 
-            out = stdout
-            if stderr.strip():
-                out = out.rstrip("\n") + ("\n\n[stderr]\n" + stderr)
+            else:
+                if "command" in rule:
+                    cmd = list(rule.get("command") or [])
+                else:
+                    template = list(rule.get("command_template") or [])
+                    if not template:
+                        continue
+                    args_schema = dict(rule.get("args") or {})
+                    values: Dict[str, Any] = {}
+                    if args_schema:
+                        if not mobj:
+                            raise ValueError("args schema provided but regex match object missing")
+                        values = validate_args_from_match(args_schema, mobj)
+                    cmd = render_command_template(template, values)
+
+                display_cmd = " ".join(shlex.quote(c) for c in cmd)
+                timeout_sec = safe_int(rule.get("timeout_sec", g.default_timeout_sec), g.default_timeout_sec)
+
+                log_info(f"[TEST] matched rule: {rule_name}")
+                log_info(f"[TEST] would run: {display_cmd}")
+
+                completed = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_sec,
+                    check=False,
+                )
+
+                stdout = completed.stdout or ""
+                stderr = completed.stderr or ""
+                exit_code = completed.returncode
+
+                out = stdout
+                if stderr.strip():
+                    out = out.rstrip("\n") + ("\n\n[stderr]\n" + stderr)
 
             out = apply_redactions(out, g.redact_regex)
             out = shorten(out, safe_int(rule.get("max_reply_chars", g.default_max_reply_chars), g.default_max_reply_chars))
@@ -823,8 +889,7 @@ def run_test_mode(rules_path: Path, sender: str, message: str, dry_run: bool) ->
             chunk_size = safe_int(rule.get("chunk_size", g.default_chunk_size), g.default_chunk_size)
             numbered_chunks = bool(rule.get("numbered_chunks", g.numbered_chunks))
 
-            rule_dry_run = bool(rule.get("dry_run", False))
-            effective_dry_run = dry_run or g.dry_run or rule_dry_run
+            effective_dry_run = dry_run or g.dry_run or bool(rule.get("dry_run", False))
 
             print("\n===== TEST RESULT =====")
             print(f"rule: {rule_name}")
@@ -883,7 +948,6 @@ def main() -> int:
         print(f"ERROR: rules file not found: {rules_path}", file=sys.stderr)
         return 2
 
-    # Load globals early to initialize logging defaults (then CLI overrides)
     loader = ConfigLoader(rules_path)
     loader.load_if_changed()
     g = loader.globals_cfg
@@ -893,7 +957,6 @@ def main() -> int:
     logfile = args.log_file or g.log_file
     setup_logging(level=level, logfile=logfile, log_format=fmt)
 
-    # Ctrl+C
     def _sigint(*_args: Any) -> None:
         log_info("Stopping…")
         raise KeyboardInterrupt
@@ -906,7 +969,6 @@ def main() -> int:
             return 2
         return run_test_mode(rules_path, args.sender, args.message, dry_run=args.dry_run)
 
-    # Normal mode
     global_dry_run = bool(args.dry_run or g.dry_run)
 
     agent = SignalAgent(rules_path, global_dry_run=global_dry_run)

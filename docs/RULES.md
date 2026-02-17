@@ -10,6 +10,10 @@ This document is the authoritative reference for:
 - Command execution behavior
 - Output formatting and chunking
 
+Plugin rules are covered at a high level here. For full plugin configuration and supported plugins, see:
+
+👉 **[PLUGINS.md](PLUGINS.md)**
+
 This is a technical reference, not a quick-start guide.
 
 ---
@@ -40,6 +44,10 @@ globals:
   log_file: str
   dry_run: bool
 
+  # Optional: plugin default config blocks (plugin-dependent)
+  # home_assistant: { ... }
+  # http_get: { ... }
+
 rules_dir: "/absolute/path/to/rules.d"
 rules:
   - <rule>
@@ -54,6 +62,10 @@ rules:
   sender: str | [str, ...]
   trigger: str
   match: exact|contains|startswith|regex
+
+  # Optional: plugin rule type (if set, this rule uses a plugin instead of command execution)
+  type: str               # e.g. "home_assistant" | "http_get"
+  <plugin_name>: { ... }  # plugin-specific config block (see PLUGINS.md)
 
   command: [str, ...]
   # OR
@@ -90,6 +102,7 @@ rules:
 - [2. Rule Evaluation Lifecycle](#2-rule-evaluation-lifecycle)
 - [3. Root Configuration (`globals`)](#3-root-configuration-globals)
 - [4. Rule Structure](#4-rule-structure)
+- [4.6 Plugin Rules](#46-plugin-rules)
 - [5. Splitting & Chunking](#5-splitting--chunking)
 - [6. Safe vs Unsafe Rule Patterns](#6-safe-vs-unsafe-rule-patterns)
 - [7. Template vs Production Rules](#7-template-vs-production-rules)
@@ -272,6 +285,38 @@ Maximum allowed execution time.
 - `full`
 - `output`
 - `bare`
+
+---
+
+## 4.6 Plugin Rules
+
+A rule can execute either:
+
+- a **local command** (`command` / `command_template`), or
+- a **plugin** (`type: <plugin_name>`)
+
+If `type` is present and non-empty, the agent treats the rule as a **plugin rule** and ignores `command` / `command_template` for that rule.
+
+Plugin rules must include a plugin config block named after the plugin.
+
+Example (conceptual):
+
+```yaml
+- name: example_plugin
+  sender: "+15551234567"
+  trigger: "example?"
+  match: exact
+
+  type: http_get
+  http_get:
+    url: "https://example.com/status"
+
+  reply_mode: output
+```
+
+For plugin-specific configuration fields, validation rules, and supported plugins, see:
+
+👉 **[PLUGINS.md](PLUGINS.md)**
 
 ---
 

@@ -31,6 +31,7 @@ help:
 	@echo "  logs        - tail logs"
 	@echo "  uninstall   - stop + disable + remove INSTALLED user units (no repo files touched)"
 	@echo "  clean       - remove repo-generated files ONLY (keeps user rules in rules.d/)"
+	@echo "  pytest      - run unit tests (pytest)"
 	@echo "  test        - run agent in --test mode locally"
 	@echo ""
 	@echo "Test overrides:"
@@ -103,3 +104,6 @@ test:
 	@echo "  sender:  $(TEST_SENDER)"
 	@echo "  message: $(TEST_MESSAGE)"
 	python3 ./signal-agent.py ./rules.yaml --test --sender "$(TEST_SENDER)" --message "$(TEST_MESSAGE)"
+.PHONY: pytest
+pytest:
+	pytest -q
