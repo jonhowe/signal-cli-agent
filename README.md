@@ -97,7 +97,9 @@ Why plugins?
 - Standardize request handling (timeouts, errors, formatting)
 - Make rules easier to understand and safer by constraining what they can do
 
-Example use case (read-only Home Assistant sensor query):
+Example use cases:
+
+**1) Read a Home Assistant sensor (HTTP GET):**
 
 ```yaml
 - name: ha_temp
@@ -114,10 +116,28 @@ Example use case (read-only Home Assistant sensor query):
   reply_mode: output
 ```
 
+**2) Activate a Home Assistant scene (controlled HTTP POST):**
+
+```yaml
+- name: bedroom_on
+  sender: "+15551234567"
+  trigger: "bedroom on"
+  match: exact
+
+  type: home_assistant_service
+  home_assistant_service:
+    domain: scene
+    service: turn_on
+    entity_id: scene.bedroom_on
+    label: "Bedroom"
+
+  reply_mode: output
+```
+
 Notes:
 
-- Plugins are intended to start **read-only** (HTTP GET) before expanding to state changes (HTTP POST).
-- No persistent connection is required: plugin calls are performed on-demand per message.
+- Plugins are performed **on-demand** per message (no persistent HTTP connection).
+- Phase 0/1 focuses on **safe reads** and **constrained service calls** (explicit domain/service/entity_id).
 - The full plugin schema and supported actions are documented in **[docs/PLUGINS.md](docs/PLUGINS.md)**.
 
 ---
