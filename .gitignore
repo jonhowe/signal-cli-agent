@@ -221,3 +221,4 @@ rules.d/custody-week.yaml
 rules.d/Location.yaml
 rules.d/calendar.yaml
 user-generated/*
+rules.d/bedroom_on.yaml
