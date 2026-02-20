@@ -65,7 +65,8 @@ Example:
 - [3. Global HTTP Safety Controls](#3-global-http-safety-controls)
 - [4. Built-in Plugins](#4-built-in-plugins)
   - [4.1 `home_assistant`](#41-home_assistant)
-  - [4.2 `http_get`](#42-http_get)
+  - [4.2 `home_assistant_service`](#42-home_assistant_service)
+  - [4.3 `http_get`](#43-http_get)
 - [5. Security Guidance](#5-security-guidance)
 - [6. Troubleshooting](#6-troubleshooting)
 
@@ -265,7 +266,66 @@ Notes:
 
 ---
 
-## 4.2 `http_get`
+## 4.2 `home_assistant_service`
+
+This plugin calls **Home Assistant services** via the REST API. It is designed for actions like **activating scenes**, turning lights on/off, and other controlled automations.
+
+It performs a **POST** to:
+
+`{url}/api/services/{domain}/{service}`
+
+### Configuration
+
+You can set defaults globally in `rules.yaml` under `globals.home_assistant_service`, and override per-rule under `home_assistant_service`.
+
+**Globals example:**
+
+```yaml
+globals:
+  home_assistant_service:
+    url: "http://homeassistant.local:8123"
+    token_file: "~/.config/signal-agent/ha_token"
+    timeout_sec: 6
+```
+
+### Rule fields
+
+- `domain` (required): Home Assistant service domain (e.g., `scene`, `light`, `switch`).
+- `service` (required): The service name within the domain (e.g., `turn_on`, `turn_off`).
+- `entity_id` (optional): A single entity id (`"scene.bedroom_on"`) **or** a list of entity ids.
+- `service_data` (optional): A YAML mapping passed as the JSON body (merged with `entity_id` if provided).
+- `label` (optional): Prefix used in the reply body.
+- `timeout_sec` (optional, default 6): Request timeout (1–30 seconds).
+- `max_body_chars` (optional, default 4000): Caps plugin output (prevents huge replies).
+
+### Example: Activate a scene
+
+This rule activates `scene.bedroom_on` using `scene.turn_on`.
+
+```yaml
+rules:
+  - name: bedroom_on
+    sender: ["+15551234567"]
+    trigger: "bedroom on"
+    match: exact
+
+    type: home_assistant_service
+    home_assistant_service:
+      domain: scene
+      service: turn_on
+      entity_id: scene.bedroom_on
+      label: "Bedroom"
+
+    # Only show the plugin output (no exit code / command)
+    reply_mode: output
+    split_reply: false
+```
+
+**Notes:**
+- The plugin reads the Home Assistant token from `token_file`. The file must be private (recommended `chmod 600`).
+- Host allowlisting and timeouts are enforced via `globals.plugin_http` (see section 3.3).
+
+## 4.3 `http_get`
 
 The `http_get` plugin is a generic read-only GET helper.
 
