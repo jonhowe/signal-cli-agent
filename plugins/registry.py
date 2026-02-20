@@ -6,12 +6,14 @@ from typing import Optional
 
 from .base import BasePlugin
 from .home_assistant import HomeAssistantPlugin
+from .home_assistant_service import HomeAssistantServicePlugin
 from .http_get import HttpGetPlugin
 
 
-# Phase 0 registry
+# Phase 0/1 registry
 _PLUGIN_REGISTRY = {
     "home_assistant": HomeAssistantPlugin(),
+    "home_assistant_service": HomeAssistantServicePlugin(),
     "http_get": HttpGetPlugin(),
 }
 
