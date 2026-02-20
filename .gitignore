@@ -219,3 +219,5 @@ rules.d/custody-week.yaml
 
 .generated-manifest.json
 rules.d/Location.yaml
+rules.d/calendar.yaml
+user-generated/*
