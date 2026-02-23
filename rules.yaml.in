@@ -1,50 +1,313 @@
+# rules.yaml.in
+#
+# Signal CLI Agent — Root Configuration Template
+#
+# This file is rendered by configure.py into rules.yaml.
+#
+# It defines:
+#   - globals: defaults + shared configuration for plugins
+#   - rules_dir: directory containing production rules (rules.d/*.yaml)
+#
+# NOTE:
+#   - Put your real rules in rules.d/*.yaml (production rules)
+#   - Shipped templates (templates/rules/*.yaml.in) are rendered into rules.d/
+#   - Your own files in rules.d/ are not deleted by clean/uninstall
+
 globals:
-  # --- Core safety defaults ---
+  # ----------------------------
+  # Core agent behavior
+  # ----------------------------
+
+  # Ignore group messages by default (recommended)
   deny_groups: true
 
+  # Default command timeout (seconds)
   default_timeout_sec: 5
+
+  # Max size of a reply before truncation (applies to command and plugin output)
   default_max_reply_chars: 3500
+
+  # Reply splitting/chunking defaults (can be overridden per rule)
   default_split_reply: false
   default_chunk_size: 1500
 
+  # If true, chunked replies include "[rule message i/n]" prefixes (only when >1 chunk)
   numbered_chunks: false
 
-  default_match: exact
+  # Default matching mode for rules (unless rule overrides)
+  default_match: exact      # exact | contains | startswith | regex
   default_case_sensitive: false
 
+  # Rate limiting defaults (per sender + per rule)
   default_cooldown_sec: 2
   default_max_runs_per_hour: 30
 
+  # Reply decoration (applied to all reply modes)
   reply_prefix: ""
   reply_suffix: ""
-  default_reply_to: sender
 
-  # NOTE: configure.py injects @PHONE@ here.
-  admin: "@PHONE@"
+  # Reply routing default
+  default_reply_to: sender  # sender | admin
+  admin: "@PHONE@"          # used when reply_to: admin
 
+  # Redaction regexes applied before sending replies (highly recommended)
   redact_regex:
     - "(?i)api[_-]?key\\s*[:=]\\s*\\S+"
     - "(?i)token\\s*[:=]\\s*\\S+"
     - "(?i)password\\s*[:=]\\s*\\S+"
 
-  # --- Plugins: shared HTTP safety defaults (Phase 1) ---
-  # These apply to plugins that make HTTP requests (home_assistant, http_get, ...)
-  #
-  # Recommended:
-  # - Set allowed_hosts to the specific host(s) your plugins may contact.
-  # - Keep max_response_bytes modest unless you explicitly need larger responses.
+  # Logging (agent logs, not signal-cli logs)
+  log_level: INFO           # DEBUG | INFO | WARNING | ERROR
+  log_format: text          # text | json
+  log_file: ""              # empty => stdout/journal
+
+  # Dry-run (commands/plugins still run, but replies are not sent)
+  dry_run: false
+
+  # Prefer V2 DBus message signals to avoid duplicates.
+  # When true, the agent subscribes to V2 callbacks only (recommended).
+  prefer_v2_signals: true
+
+  # ----------------------------
+  # Shared HTTP safety defaults (applies to http_get + home_assistant plugins)
+  # ----------------------------
   plugin_http:
+    # Only allow these URL schemes
     allowed_schemes: ["http", "https"]
-    allowed_hosts: []          # e.g. ["homeassistant.home.lan", "homeassistant.home.lan:8123"]
-    follow_redirects: true     # redirects are validated against allowed_hosts
-    max_response_bytes: 262144 # 256 KiB
 
-  # --- Plugin: Home Assistant (optional global defaults) ---
-  # home_assistant:
-  #   url: "http://homeassistant.home.lan:8123"
-  #   token_file: "~/.config/signal-cli-agent/ha_token"
-  #   timeout_sec: 4
-  #   require_private_token_file: true
+    # OPTIONAL host allowlist for SSRF protection.
+    # If empty: allow any host (less safe).
+    # If set: only these hosts (and optionally ports) can be called.
+    #
+    # Examples:
+    #   - "homeassistant.home.lan"
+    #   - "homeassistant.home.lan:8123"
+    #
+    allowed_hosts: []
 
-# NEW: all rules are loaded from here (in addition to any rules in this file)
+    # Maximum response size to read (bytes). Prevents downloading huge payloads.
+    max_response_bytes: 262144  # 256 KiB
+
+    # Follow redirects (if true) AND validate redirect targets against allowed_hosts/schemes.
+    follow_redirects: false
+
+  # ----------------------------
+  # Plugin: home_assistant (READ-ONLY)
+  # ----------------------------
+  #
+  # Type: home_assistant
+  #
+  # Supported actions:
+  #   - get_state  (GET /api/states/<entity_id>)
+  #   - template   (POST /api/template)  [read-only rendering]
+  #
+  # Rule-level config lives under: home_assistant:
+  #
+  home_assistant:
+    # Base URL for HA instance (no trailing slash required)
+    # Example: "http://homeassistant.home.lan:8123"
+    url: ""
+
+    # File containing a long-lived access token (recommended: chmod 600)
+    # Example: "/home/user/.config/signal-agent/ha_token"
+    token_file: ""
+
+    # Optional request timeout
+    timeout_sec: 4
+
+    # Optional: fail if token_file is group/world-readable
+    require_private_token_file: false
+
+  # Example rule snippets for home_assistant plugin (place these in rules.d/*.yaml):
+  #
+  # 1) Read a sensor state
+  #
+  # - name: custody_week
+  #   sender: ["@PHONE@"]
+  #   trigger: "what week is it?"
+  #   match: exact
+  #   type: home_assistant
+  #   home_assistant:
+  #     action: get_state
+  #     entity_id: sensor.custody_week_a_or_b
+  #     label: "Custody week"
+  #     # Optional extraction:
+  #     # value: state
+  #     # json_path: attributes.unit_of_measurement
+  #     # append_unit: true
+  #   reply_mode: output
+  #
+  # 2) Render a template (read-only) for full control of output text
+  #
+  # - name: custody_week_template
+  #   sender: ["@PHONE@"]
+  #   trigger: "week?"
+  #   match: exact
+  #   type: home_assistant
+  #   home_assistant:
+  #     action: template
+  #     template: >-
+  #       It is currently {{ states('sensor.custody_week_a_or_b') }}
+  #   reply_mode: bare
+
+  # ----------------------------
+  # Plugin: home_assistant_service (WRITE / STATE-CHANGING)
+  # ----------------------------
+  #
+  # Type: home_assistant_service
+  #
+  # Purpose:
+  #   Call Home Assistant services (POST /api/services/<domain>/<service>)
+  #
+  # Security note:
+  #   This can change state (lights, locks, etc.). Use strict sender allowlists
+  #   and stronger rate limits for sensitive actions.
+  #
+  home_assistant_service:
+    # Base URL for HA instance
+    url: ""
+
+    # Token file
+    token_file: ""
+
+    # Request timeout
+    timeout_sec: 6
+
+    # Optional strict token file permissions
+    require_private_token_file: false
+
+    # OPTIONAL allowlist to restrict what can be called via this plugin.
+    # If empty => allow any domain/service (less safe).
+    #
+    # Example:
+    # allowed_services:
+    #   - "scene.turn_on"
+    #   - "light.turn_on"
+    #   - "light.turn_off"
+    #
+    allowed_services: []
+
+  # Example rule snippet: activate a scene
+  #
+  # - name: bedroom_on
+  #   sender: ["@PHONE@"]
+  #   trigger: "bedroom on"
+  #   match: exact
+  #   type: home_assistant_service
+  #   home_assistant_service:
+  #     domain: scene
+  #     service: turn_on
+  #     entity_id: scene.bedroom_on
+  #     label: "Bedroom"
+  #     # Optional service data:
+  #     # service_data:
+  #     #   transition: 1
+  #   reply_mode: output
+  #   cooldown_sec: 5
+  #   max_runs_per_hour: 30
+
+  # ----------------------------
+  # Plugin: http_get (READ-ONLY GENERIC)
+  # ----------------------------
+  #
+  # Type: http_get
+  #
+  # Purpose:
+  #   Fetch a URL (GET) and optionally extract a JSON field (json_path).
+  #
+  # Security note:
+  #   Use globals.plugin_http.allowed_hosts to prevent SSRF / unexpected access.
+  #
+  http_get:
+    # Default timeout for generic http_get calls
+    timeout_sec: 4
+
+  # Example rule snippet: GET a status endpoint
+  #
+  # - name: status_example
+  #   sender: ["@PHONE@"]
+  #   trigger: "status?"
+  #   match: exact
+  #   type: http_get
+  #   http_get:
+  #     url: "https://example.com/status"
+  #     label: "Status"
+  #   reply_mode: output
+  #
+  # Example rule snippet: Extract JSON using json_path
+  #
+  # - name: version_example
+  #   sender: ["@PHONE@"]
+  #   trigger: "version?"
+  #   match: exact
+  #   type: http_get
+  #   http_get:
+  #     url: "https://example.com/api/info"
+  #     json_path: "data.version"
+  #     label: "Version"
+  #   reply_mode: output
+
+  # ----------------------------
+  # NLP Routing via LiteLLM (Option A)
+  # ----------------------------
+  #
+  # Purpose:
+  #   If no rule matches normally, an NLP router can choose one rule from an allowlist
+  #   using your local LiteLLM proxy (OpenAI-compatible API).
+  #
+  # Important safety properties:
+  #   - NLP can only select from allowed_rules
+  #   - Sender restrictions + rate limits still apply on the chosen rule
+  #   - Confidence threshold gating
+  #
+  nlp:
+    enabled: false
+
+    # LiteLLM default port (proxy). Using /v1 for OpenAI-compatible endpoints.
+    base_url: "http://127.0.0.1:4000/v1"
+
+    # Model name as configured/routed by LiteLLM
+    model: "gpt-4o-mini"
+
+    # Optional token file for proxy auth (chmod 600)
+    token_file: ""
+
+    timeout_sec: 8
+
+    # Minimum confidence to execute a routed action
+    min_confidence: 0.85
+
+    # Only these rules may ever be selected by NLP routing.
+    # Add rule names here explicitly (very important).
+    allowed_rules: []
+
+  # Per-rule NLP hints (optional) can be added in rule YAML:
+  #
+  # nlp:
+  #   enabled: true
+  #   phrases:
+  #     - "turn on the bedroom lights"
+  #     - "make the bedroom cozy"
+  #
+  # Only rules with nlp.enabled: true AND included in globals.nlp.allowed_rules
+  # should be considered by the router.
+
+# ----------------------------
+# Where the agent loads rules from
+# ----------------------------
+
+# The agent will load:
+#   1) this rendered rules.yaml
+#   2) every .yaml/.yml in rules_dir
+#
+# This project uses rules.d as the production rules directory.
 rules_dir: "@REPO@/rules.d"
+
+# Optional inline rules can live here, but it's recommended to keep rules in rules.d/
+# rules:
+#   - name: example_inline_rule
+#     sender: ["@PHONE@"]
+#     trigger: "uptime?"
+#     match: exact
+#     command: ["uptime"]
+#     reply_mode: output
