@@ -8,6 +8,10 @@ For the full rule schema and configuration reference, see:
 
 👉 **[docs/RULES.md](docs/RULES.md)**
 
+For optional "less strict" prompts via LiteLLM (AI routing), see:
+
+👉 **[docs/NLP.md](docs/NLP.md)**
+
 ---
 
 ## Table of Contents
@@ -16,6 +20,7 @@ For the full rule schema and configuration reference, see:
 - [Why Use This?](#why-use-this)
 - [Architecture](#architecture)
 - [Plugin Architecture](#plugin-architecture)
+- [NLP Routing (LiteLLM)](#nlp-routing-litellm)
 - [Installation](#installation)
   - [Prerequisites](#prerequisites)
   - [Quick Start (Recommended)](#quick-start-recommended)
@@ -97,9 +102,7 @@ Why plugins?
 - Standardize request handling (timeouts, errors, formatting)
 - Make rules easier to understand and safer by constraining what they can do
 
-Example use cases:
-
-**1) Read a Home Assistant sensor (HTTP GET):**
+Example use case (read-only Home Assistant sensor query):
 
 ```yaml
 - name: ha_temp
@@ -116,7 +119,7 @@ Example use cases:
   reply_mode: output
 ```
 
-**2) Activate a Home Assistant scene (controlled HTTP POST):**
+Example use case (state change: activate a Home Assistant scene):
 
 ```yaml
 - name: bedroom_on
@@ -125,20 +128,35 @@ Example use cases:
   match: exact
 
   type: home_assistant_service
-  home_assistant_service:
+  home_assistant:
     domain: scene
     service: turn_on
     entity_id: scene.bedroom_on
-    label: "Bedroom"
+    ok_message: "Bedroom scene activated"
 
   reply_mode: output
 ```
 
 Notes:
 
-- Plugins are performed **on-demand** per message (no persistent HTTP connection).
-- Phase 0/1 focuses on **safe reads** and **constrained service calls** (explicit domain/service/entity_id).
+- Plugins are executed **on-demand** per message (no persistent HTTP connections).
+- Read-only plugins (GET) and state-changing plugins (POST) are both supported.
 - The full plugin schema and supported actions are documented in **[docs/PLUGINS.md](docs/PLUGINS.md)**.
+
+---
+
+## NLP Routing (LiteLLM)
+
+Optionally, the agent can use a local **LiteLLM proxy** to route free-form text
+to a **pre-approved rule** when no rule matches normally.
+
+This preserves the safety model:
+
+- Only rules explicitly marked `nlp.enabled: true` are eligible.
+- Sender allowlists and rate limits still apply.
+- The model can only choose from the allowlisted rule names.
+
+See: **[docs/NLP.md](docs/NLP.md)**
 
 ---
 

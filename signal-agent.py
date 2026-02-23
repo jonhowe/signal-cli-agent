@@ -55,6 +55,7 @@ import yaml
 
 # Plugin support (Phase 0–1)
 from plugins.registry import get_plugin
+from plugins.nlp_router import route_message
 
 # Optional imports: only needed in non-test mode
 try:
@@ -357,6 +358,10 @@ class GlobalsCfg:
     log_file: str = ""         # empty => stdout
     dry_run: bool = False      # suppress sends globally
 
+    # NLP router config is stored in globals_raw under "nlp".
+    # This flag is mirrored here for quick access.
+    nlp_enabled: bool = False
+
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "GlobalsCfg":
         return GlobalsCfg(
@@ -385,6 +390,8 @@ class GlobalsCfg:
             log_format=str(d.get("log_format", "text")),
             log_file=str(d.get("log_file", "")),
             dry_run=bool(d.get("dry_run", False)),
+
+            nlp_enabled=bool((d.get("nlp") or {}).get("enabled", False)),
         )
 
 
@@ -535,6 +542,11 @@ class SignalAgent:
         self.rate_limiter = RateLimiter()
         self.global_dry_run = global_dry_run
 
+        # De-dupe cache for DBus callbacks. Some signal-cli versions emit both
+        # V1 and V2 callbacks for the same message (e.g. sync + syncv2), which
+        # can cause double logs / unintended cooldown blocks.
+        self._recent_events: deque[Tuple[int, str, str, str]] = deque(maxlen=200)
+
         self.bus = SessionBus()
         self.signal = self.bus.get("org.asamk.Signal")
 
@@ -573,6 +585,15 @@ class SignalAgent:
             log_err(f"ERROR reloading rules: {e}")
             return
 
+        # De-dupe: key by (timestamp, sender, destination, message).
+        # Keep only a short rolling window.
+        dst_key = destination or "-"
+        msg_key = message or ""
+        key = (int(timestamp_ms), str(sender), str(dst_key), str(msg_key))
+        if key in self._recent_events:
+            return
+        self._recent_events.append(key)
+
         g = self.rules_loader.globals_cfg
         globals_raw = self.rules_loader.globals_raw  # NEW
 
@@ -584,12 +605,26 @@ class SignalAgent:
         dst = destination or "-"
         log_info(f"{sender} [{kind} -> {dst}]: {message}")
 
+        # NLP fallback candidates (LiteLLM). Collected during normal scan.
+        nlp_candidates: List[Dict[str, Any]] = []
+
         for rule in self.rules_loader.rules:
             try:
                 rule_name = str(rule.get("name", "unnamed"))
 
                 if not sender_allowed(rule.get("sender"), sender):
                     continue
+
+                # Collect AI-router candidates (opt-in per rule).
+                nlp_block = rule.get("nlp") or {}
+                if isinstance(nlp_block, dict) and bool(nlp_block.get("enabled", False)):
+                    nlp_candidates.append(
+                        {
+                            "name": rule_name,
+                            "description": str(rule.get("description", "")),
+                            "phrases": list(nlp_block.get("phrases") or []),
+                        }
+                    )
 
                 match_mode = str(rule.get("match", g.default_match))
                 case_sensitive = bool(rule.get("case_sensitive", g.default_case_sensitive))
@@ -760,6 +795,172 @@ class SignalAgent:
                 log_err(f"↳ ERROR processing rule: {e}")
                 continue
 
+        # ----- NLP fallback (LiteLLM) -----
+        # Only runs if enabled in globals and at least one rule has nlp.enabled: true.
+        try:
+            if g.nlp_enabled and nlp_candidates:
+                decision = route_message(globals_raw, message, nlp_candidates, sender=sender)
+                if not decision:
+                    return
+
+                chosen = (decision.rule or "").strip()
+                if not chosen or chosen == "no_match":
+                    return
+
+                nlp_conf = float(decision.confidence or 0.0)
+                min_conf = float((globals_raw.get("nlp") or {}).get("min_confidence", 0.85))
+                if nlp_conf < min_conf:
+                    log_info(f"(nlp) no action: confidence {nlp_conf:.2f} < {min_conf:.2f}")
+                    return
+
+                # Find chosen rule by name.
+                chosen_rule: Optional[Dict[str, Any]] = None
+                for r in self.rules_loader.rules:
+                    if str(r.get("name", "")) == chosen:
+                        chosen_rule = r
+                        break
+                if not chosen_rule:
+                    log_err(f"(nlp) model selected unknown rule: {chosen}")
+                    return
+
+                # Only allow AI to invoke nlp-enabled rules.
+                nlp_block = chosen_rule.get("nlp") or {}
+                if not (isinstance(nlp_block, dict) and bool(nlp_block.get("enabled", False))):
+                    log_err(f"(nlp) selected rule is not nlp-enabled: {chosen}")
+                    return
+
+                # Sender restrictions still apply.
+                if not sender_allowed(chosen_rule.get("sender"), sender):
+                    log_warn(f"(nlp) selected rule not allowed for sender: {chosen}")
+                    return
+
+                log_info(f"(nlp) routed '{message}' -> {chosen} (conf={nlp_conf:.2f})")
+
+                # Execute with the same logic as a normal match.
+                # We obtain match_obj if the chosen rule's trigger also matches (useful for regex args).
+                match_mode = str(chosen_rule.get("match", g.default_match))
+                case_sensitive = bool(chosen_rule.get("case_sensitive", g.default_case_sensitive))
+                trigger = str(chosen_rule.get("trigger", "")).strip()
+                _matched, mobj = match_trigger(message, trigger, match_mode, case_sensitive)
+                if not _matched:
+                    mobj = None
+
+                # Reuse the existing executor by invoking the same code path: we do a local inline
+                # execution that mirrors the matched section.
+                rule = chosen_rule
+                rule_name = str(rule.get("name", "unnamed"))
+
+                cooldown_sec = safe_int(rule.get("cooldown_sec", g.default_cooldown_sec), g.default_cooldown_sec)
+                max_runs_per_hour = safe_int(rule.get("max_runs_per_hour", g.default_max_runs_per_hour), g.default_max_runs_per_hour)
+                ok, why = self.rate_limiter.allow(sender, rule_name, cooldown_sec, max_runs_per_hour)
+                if not ok:
+                    log_warn(f"↳ rule matched but blocked: {rule_name} ({why})")
+                    return
+
+                # Reply routing
+                reply_to = str(rule.get("reply_to", g.default_reply_to)).strip().lower()
+                if reply_to == "sender":
+                    target = sender
+                elif reply_to == "admin":
+                    target = g.admin or sender
+                elif reply_to == "number":
+                    target = str(rule.get("reply_number", "")).strip() or sender
+                else:
+                    target = sender
+
+                rule_dry_run = bool(rule.get("dry_run", False))
+                effective_dry_run = rule_dry_run or self.global_dry_run or g.dry_run
+
+                reply_prefix = str(rule.get("reply_prefix", g.reply_prefix))
+                reply_suffix = str(rule.get("reply_suffix", g.reply_suffix))
+                reply_mode = str(rule.get("reply_mode", "full")).strip().lower()
+
+                split_reply = bool(rule.get("split_reply", g.default_split_reply))
+                chunk_size = safe_int(rule.get("chunk_size", g.default_chunk_size), g.default_chunk_size)
+                numbered_chunks = bool(rule.get("numbered_chunks", g.numbered_chunks))
+
+                plugin_type = str(rule.get("type", "")).strip().lower()
+                if plugin_type:
+                    plugin = get_plugin(plugin_type)
+                    if not plugin:
+                        log_err(f"↳ rule matched but unknown plugin type: {rule_name} type={plugin_type}")
+                        return
+                    plugin.validate(rule, globals_raw)
+                    ctx = {
+                        "kind": kind,
+                        "timestamp_ms": timestamp_ms,
+                        "sender": sender,
+                        "destination": destination,
+                        "message": message,
+                        "rule_name": rule_name,
+                        "match_obj": mobj,
+                    }
+                    result = plugin.run(rule, globals_raw, ctx)
+                    action = ""
+                    block = rule.get(plugin_type) or {}
+                    if isinstance(block, dict):
+                        action = str(block.get("action", "")).strip()
+                    display_cmd = f"plugin:{plugin_type}" + (f".{action}" if action else "")
+                    exit_code = int(getattr(result, "exit_code", 0) or 0)
+                    out = str(getattr(result, "body", "") or "")
+                else:
+                    if "command" in rule:
+                        cmd = list(rule.get("command") or [])
+                    else:
+                        template = list(rule.get("command_template") or [])
+                        if not template:
+                            return
+                        args_schema = dict(rule.get("args") or {})
+                        values: Dict[str, Any] = {}
+                        if args_schema:
+                            if not mobj:
+                                raise ValueError("args schema provided but regex match object missing")
+                            values = validate_args_from_match(args_schema, mobj)
+                        cmd = render_command_template(template, values)
+
+                    display_cmd = " ".join(shlex.quote(c) for c in cmd)
+                    timeout_sec = safe_int(rule.get("timeout_sec", g.default_timeout_sec), g.default_timeout_sec)
+                    completed = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec, check=False)
+                    stdout = completed.stdout or ""
+                    stderr = completed.stderr or ""
+                    exit_code = completed.returncode
+                    out = stdout
+                    if stderr.strip():
+                        out = out.rstrip("\n") + ("\n\n[stderr]\n" + stderr)
+
+                out = apply_redactions(out, g.redact_regex)
+                out = shorten(out, safe_int(rule.get("max_reply_chars", g.default_max_reply_chars), g.default_max_reply_chars))
+
+                reply = build_reply(
+                    rule_name=rule_name,
+                    reply_mode=reply_mode,
+                    exit_code=exit_code,
+                    display_cmd=display_cmd,
+                    out=out,
+                    reply_prefix=reply_prefix,
+                    reply_suffix=reply_suffix,
+                )
+
+                if split_reply and chunk_size > 0 and len(reply) > chunk_size:
+                    parts = [p for p in split_chunks_by_lines(reply, chunk_size) if p]
+                    total = len(parts)
+                    for idx, part in enumerate(parts, start=1):
+                        if numbered_chunks and total > 1:
+                            if reply_mode == "bare":
+                                prefix = f"[message {idx}/{total}]\n"
+                            else:
+                                prefix = f"[{rule_name} message {idx}/{total}]\n"
+                            payload = prefix + part
+                        else:
+                            payload = part
+                        self.maybe_send(target, payload, effective_dry_run)
+                        time.sleep(0.2)
+                else:
+                    self.maybe_send(target, reply, effective_dry_run)
+
+        except Exception as e:
+            log_err(f"(nlp) routing error: {e}")
+
 
 # -----------------------------
 # Test mode runner (no DBus)
@@ -775,11 +976,23 @@ def run_test_mode(rules_path: Path, sender: str, message: str, dry_run: bool) ->
     log_info(f"[TEST] rules={rules_path}")
     log_info(f"[TEST] sender={sender} message={message!r}")
 
+    nlp_candidates: List[Dict[str, Any]] = []
+
     for rule in loader.rules:
         try:
             rule_name = str(rule.get("name", "unnamed"))
             if not sender_allowed(rule.get("sender"), sender):
                 continue
+
+            nlp_block = rule.get("nlp") or {}
+            if isinstance(nlp_block, dict) and bool(nlp_block.get("enabled", False)):
+                nlp_candidates.append(
+                    {
+                        "name": rule_name,
+                        "description": str(rule.get("description", "")),
+                        "phrases": list(nlp_block.get("phrases") or []),
+                    }
+                )
 
             match_mode = str(rule.get("match", g.default_match))
             case_sensitive = bool(rule.get("case_sensitive", g.default_case_sensitive))
@@ -920,6 +1133,29 @@ def run_test_mode(rules_path: Path, sender: str, message: str, dry_run: bool) ->
             continue
 
     log_warn("[TEST] no matching rule found")
+
+    # NLP fallback in test mode
+    try:
+        if g.nlp_enabled and nlp_candidates:
+            decision = route_message(globals_raw, message, nlp_candidates, sender=sender)
+            if decision and decision.rule and decision.rule != "no_match":
+                nlp_conf = float(decision.confidence or 0.0)
+                min_conf = float((globals_raw.get("nlp") or {}).get("min_confidence", 0.85))
+                if nlp_conf < min_conf:
+                    log_warn(f"[TEST] NLP confidence too low: {nlp_conf:.2f} < {min_conf:.2f}")
+                    return 1
+                print(f"\n[TEST] NLP routed to rule: {decision.rule} (conf={nlp_conf:.2f})\n")
+                # Re-run test mode by forcing the message to be the chosen rule's trigger.
+                # Easiest: run the test loop again but treat any match as acceptable.
+                for rule in loader.rules:
+                    if str(rule.get("name", "")) != decision.rule:
+                        continue
+                    # Force execution without requiring match.
+                    # For regex-arg rules, matching may still be required.
+                    return run_test_mode(rules_path, sender, str(rule.get("trigger", message)), dry_run=dry_run)
+    except Exception as e:
+        log_err(f"[TEST] NLP routing error: {e}")
+
     return 1
 
 

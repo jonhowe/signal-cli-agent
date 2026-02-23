@@ -64,7 +64,7 @@ rules:
   match: exact|contains|startswith|regex
 
   # Optional: plugin rule type (if set, this rule uses a plugin instead of command execution)
-  type: str               # e.g. "home_assistant" | "http_get"
+  type: str               # e.g. "home_assistant" | "home_assistant_service" | "http_get"
   <plugin_name>: { ... }  # plugin-specific config block (see PLUGINS.md)
 
   command: [str, ...]
@@ -92,6 +92,11 @@ rules:
   reply_number: str
 
   dry_run: bool
+
+  # Optional: enable NLP routing (LiteLLM) as a fallback when no rule matches.
+  nlp:
+    enabled: bool
+    phrases: [str, ...]
 ```
 
 ---
@@ -483,3 +488,12 @@ User responsibility:
 - Validate parameters
 - Store secrets securely
 - Avoid destructive commands
+
+---
+
+# 9. NLP Routing (optional)
+
+Signal CLI Agent can optionally use a local LiteLLM proxy to map free-form text
+to a **pre-approved** rule ("less strict" prompts). This is disabled by default.
+
+See: **docs/NLP.md**

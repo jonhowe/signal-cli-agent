@@ -222,3 +222,4 @@ rules.d/Location.yaml
 rules.d/calendar.yaml
 user-generated/*
 rules.d/bedroom_on.yaml
+litellm_token
