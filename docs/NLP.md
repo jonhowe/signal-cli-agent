@@ -29,16 +29,29 @@ Add this under `globals:` in `rules.yaml` (or `rules.yaml.in` template):
 globals:
   nlp:
     enabled: true
-    base_url: "http://127.0.0.1:4000/v1"   # LiteLLM default
-    model: "gpt-4o-mini"                   # whatever your proxy routes
+    base_url: "http://127.0.0.1:4001/v1"   # LiteLLM (example)
+    model: "GPT-5 nano"                    # whatever your proxy routes
     token_file: "~/.config/signal-agent/litellm_token"  # optional
     timeout_sec: 8
     min_confidence: 0.85
+    max_tokens: 800
+    temperature: 1
 ```
 
 Notes:
 - `token_file` is optional. If set, it is read and passed as `Authorization: Bearer ...`.
-- Keep `temperature=0` (built-in) for deterministic routing.
+- If you use GPT-5 models, set `temperature: 1` (some GPT-5 model groups reject `temperature: 0`).
+
+### Command prefix gate
+
+If you enable `globals.command_prefix`, users must prefix NLP commands too.
+The prefix is stripped before NLP routing.
+
+Example:
+
+```
+! can you turn on the bedroom lights?
+```
 
 ## Enabling rules for NLP routing
 

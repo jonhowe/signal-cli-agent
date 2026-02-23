@@ -44,6 +44,11 @@ globals:
   log_file: str
   dry_run: bool
 
+  # Optional: command prefix gate (recommended when using NLP)
+  command_prefix: str
+  command_prefix_case_sensitive: bool
+  command_prefix_strip_whitespace: bool
+
   # Optional: plugin default config blocks (plugin-dependent)
   # home_assistant: { ... }
   # http_get: { ... }
@@ -158,6 +163,29 @@ globals:
 ```
 
 Rules may override any default.
+
+## 3.1 Command prefix gate
+
+If `globals.command_prefix` is set to a non-empty string, the agent will **only**
+process messages that start with that prefix. The prefix is stripped before rule
+matching and before NLP routing.
+
+Example:
+
+```yaml
+globals:
+  command_prefix: "!"
+  command_prefix_strip_whitespace: true
+```
+
+Then users must send:
+
+```
+! bedroom on
+! what week is it?
+```
+
+If `command_prefix` is empty (`""`), all messages are eligible for rule matching.
 
 ---
 

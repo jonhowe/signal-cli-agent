@@ -158,6 +158,28 @@ This preserves the safety model:
 
 See: **[docs/NLP.md](docs/NLP.md)**
 
+### Command prefix gate (recommended)
+
+To prevent accidental triggers (especially with NLP enabled), you can require a
+prefix on **all** commands.
+
+Set this in `rules.yaml` under `globals`:
+
+```yaml
+globals:
+  command_prefix: "!"
+  command_prefix_strip_whitespace: true
+```
+
+Then users must send:
+
+```
+! bedroom on
+! can you turn on the bedroom lights?
+```
+
+The prefix is stripped before rule matching and before NLP routing.
+
 ---
 
 ## Installation

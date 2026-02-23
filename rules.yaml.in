@@ -69,6 +69,21 @@ globals:
   prefer_v2_signals: true
 
   # ----------------------------
+  # Command prefix gate (recommended)
+  # ----------------------------
+  # If command_prefix is non-empty, the agent will ONLY process messages that start
+  # with this prefix. The prefix is stripped before rule matching and NLP routing.
+  #
+  # Examples:
+  #   command_prefix: "!"     # use: "! bedroom on"
+  #   command_prefix: "bot:"  # use: "bot: what week is it?"
+  #
+  # Set to "" to disable (not recommended if you use NLP).
+  command_prefix: ""
+  command_prefix_case_sensitive: false
+  command_prefix_strip_whitespace: true
+
+  # ----------------------------
   # Shared HTTP safety defaults (applies to http_get + home_assistant plugins)
   # ----------------------------
   plugin_http:
