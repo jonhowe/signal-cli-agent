@@ -204,6 +204,28 @@ def normalize_text(s: str, case_sensitive: bool) -> str:
     return s if case_sensitive else s.lower()
 
 
+def apply_command_prefix(raw: str, prefix: str, case_sensitive: bool, strip_ws: bool) -> Optional[str]:
+    """If prefix is set, require it and strip it.
+
+    Returns:
+      - stripped message if prefix matched
+      - original message if prefix is empty
+      - None if prefix is set and message does not start with it
+    """
+    msg = raw if raw is not None else ""
+    pref = (prefix or "")
+    if not pref:
+        return msg
+
+    hay = msg if case_sensitive else msg.lower()
+    needle = pref if case_sensitive else pref.lower()
+    if not hay.startswith(needle):
+        return None
+
+    out = msg[len(pref):]
+    return out.lstrip() if strip_ws else out
+
+
 def match_trigger(message: str, trigger: str, mode: str, case_sensitive: bool) -> Tuple[bool, Optional[re.Match]]:
     mode = (mode or "exact").strip().lower()
     mtxt = normalize_text(message, case_sensitive)
@@ -362,6 +384,12 @@ class GlobalsCfg:
     # This flag is mirrored here for quick access.
     nlp_enabled: bool = False
 
+    # Optional command prefix gate. If set, only messages starting with this prefix
+    # are treated as commands. The prefix is stripped before matching/NLP.
+    command_prefix: str = ""
+    command_prefix_case_sensitive: bool = False
+    command_prefix_strip_whitespace: bool = True
+
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "GlobalsCfg":
         return GlobalsCfg(
@@ -392,6 +420,10 @@ class GlobalsCfg:
             dry_run=bool(d.get("dry_run", False)),
 
             nlp_enabled=bool((d.get("nlp") or {}).get("enabled", False)),
+
+            command_prefix=str(d.get("command_prefix", "")),
+            command_prefix_case_sensitive=bool(d.get("command_prefix_case_sensitive", False)),
+            command_prefix_strip_whitespace=bool(d.get("command_prefix_strip_whitespace", True)),
         )
 
 
@@ -601,6 +633,18 @@ class SignalAgent:
         if is_group and g.deny_groups:
             log_info(f"(group ignored) {sender}: {message}")
             return
+
+        # Optional command prefix gate (applies to all matching + NLP).
+        # If enabled, ignore messages that don't start with the prefix.
+        filtered = apply_command_prefix(
+            message,
+            g.command_prefix,
+            g.command_prefix_case_sensitive,
+            g.command_prefix_strip_whitespace,
+        )
+        if filtered is None:
+            return
+        message = filtered
 
         dst = destination or "-"
         log_info(f"{sender} [{kind} -> {dst}]: {message}")
@@ -975,6 +1019,17 @@ def run_test_mode(rules_path: Path, sender: str, message: str, dry_run: bool) ->
 
     log_info(f"[TEST] rules={rules_path}")
     log_info(f"[TEST] sender={sender} message={message!r}")
+
+    filtered = apply_command_prefix(
+        message,
+        g.command_prefix,
+        g.command_prefix_case_sensitive,
+        g.command_prefix_strip_whitespace,
+    )
+    if filtered is None:
+        log_warn("[TEST] message ignored (missing required command_prefix)")
+        return 1
+    message = filtered
 
     nlp_candidates: List[Dict[str, Any]] = []
 
