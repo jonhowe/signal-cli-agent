@@ -79,3 +79,17 @@ The router requests strict JSON:
 The agent rejects:
 - rule names not in the candidate set
 - decisions with confidence lower than `min_confidence`
+
+## GPT-5: empty content with finish_reason=length
+
+If you see logs like:
+
+- `finish_reason: "length"`
+- `message.content: ""`
+- `completion_tokens_details.reasoning_tokens` equals the max tokens
+
+…it means the model consumed the entire completion budget on reasoning and produced no visible output.
+
+Fix:
+- increase `globals.nlp.max_tokens` (try 600–1200)
+- keep `temperature: 1` for GPT-5 models
