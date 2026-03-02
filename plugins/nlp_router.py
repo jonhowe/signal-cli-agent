@@ -162,8 +162,10 @@ def route_message(
     Route a message using LiteLLM (OpenAI-compatible /v1/chat/completions).
 
     Returns:
-      - NlpRouteResult if rule selected with confidence >= threshold
-      - None if no_match or below threshold or disabled
+      - NlpRouteResult if NLP routing is enabled and a response was produced.
+        (This includes "no_match" and low-confidence decisions; callers should
+        apply policy thresholds themselves.)
+      - None if NLP routing is disabled
 
     GPT-5 NOTE:
       GPT-5 family can consume the entire completion budget as reasoning tokens and
@@ -183,7 +185,10 @@ def route_message(
         raise ValueError("globals.nlp.model is required")
 
     timeout_sec = int(cfg.get("timeout_sec", 8))
-    min_conf = float(cfg.get("min_confidence", 0.85))
+    # NOTE: min_confidence is intentionally NOT enforced here. The caller
+    # (signal-agent) applies confidence gating so we can still return
+    # structured "no_match" responses for observability/testing.
+    _min_conf = float(cfg.get("min_confidence", 0.85))
 
     # For GPT-5, default higher max_tokens so it can actually emit content
     max_tokens_cfg = cfg.get("max_tokens", cfg.get("max_output_tokens", 800))
@@ -267,9 +272,7 @@ def route_message(
     confidence = float(obj.get("confidence", 0.0))
     reason = str(obj.get("reason", "")).strip()
 
-    if not rule or rule == "no_match":
-        return None
-    if confidence < min_conf:
-        return None
+    if not rule:
+        raise ValueError("Model response missing required key: rule")
 
     return NlpRouteResult(rule=rule, confidence=confidence, reason=reason)

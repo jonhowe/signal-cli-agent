@@ -52,6 +52,8 @@ globals:
   # Optional: plugin default config blocks (plugin-dependent)
   # home_assistant: { ... }
   # http_get: { ... }
+  # Optional: service plugins (long-running extensions)
+  # rest_api: { ... }   # see docs/REST_API.md
 
 rules_dir: "/absolute/path/to/rules.d"
 rules:
@@ -508,6 +510,14 @@ The agent enforces:
 - Regex argument validation
 - Rate limiting
 - Optional redaction
+
+If you enable the optional **REST API service**, ensure you also apply:
+
+- Bearer token auth
+- Destination allowlists
+- Localhost binding or an IP allowlist
+
+See: **[docs/REST_API.md](REST_API.md)**
 
 User responsibility:
 

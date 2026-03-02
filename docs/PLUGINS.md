@@ -12,6 +12,12 @@ It explains:
 
 This is a technical reference, not a quick-start guide.
 
+This document primarily covers **rule plugins** (plugins executed when a YAML rule matches).
+
+For long-running extensions ("service plugins") such as the optional REST API, see:
+
+👉 **[docs/REST_API.md](REST_API.md)**
+
 For the rule engine, matching, chunking, and general configuration reference, see:
 
 👉 **[docs/RULES.md](RULES.md)**
@@ -27,7 +33,7 @@ globals:
   plugin_http:
     allowed_schemes: ["http", "https"]
     allowed_hosts: []          # empty => allow all (not recommended)
-    follow_redirects: true     # redirects are validated against allowed_hosts
+    follow_redirects: false    # if true, redirects are validated against allowed_hosts
     max_response_bytes: 262144 # hard cap per HTTP response
 ```
 
@@ -87,6 +93,29 @@ A plugin is a small Python component that:
 - returns a standardized result object (`PluginResult`)
 
 Plugins are designed for **extensible, structured** integrations.
+
+## 1.1 Rule plugins vs service plugins
+
+Signal CLI Agent supports two plugin *shapes*:
+
+- **Rule plugins** (this document): run when a rule matches an incoming Signal message.
+- **Service plugins**: long-running background components that expose new interfaces
+  (for example, a REST API that can send outbound Signal messages).
+
+```mermaid
+flowchart TD
+  subgraph Rule plugin
+    A[Signal message] --> B[Rule engine]
+    B --> C[plugin.validate + plugin.run]
+    C --> D[Signal reply]
+  end
+
+  subgraph Service plugin
+    E[External event] --> F[service.start\n(background thread)]
+    F --> G[Thread-safe send_message()]
+    G --> H[Signal send]
+  end
+```
 
 ---
 
@@ -164,9 +193,10 @@ globals:
 
 # 4. Built-in Plugins
 
-Phase 0–1 includes two plugins:
+Phase 0–1 includes these plugins:
 
 - `home_assistant`
+- `home_assistant_service`
 - `http_get`
 
 ---
@@ -297,6 +327,23 @@ globals:
 - `label` (optional): Prefix used in the reply body.
 - `timeout_sec` (optional, default 6): Request timeout (1–30 seconds).
 - `max_body_chars` (optional, default 4000): Caps plugin output (prevents huge replies).
+
+### Optional allowlist: `allowed_services`
+
+Because this plugin can change state, you can restrict *which* HA services may be called.
+
+Set an allowlist in `rules.yaml`:
+
+```yaml
+globals:
+  home_assistant_service:
+    allowed_services:
+      - "scene.turn_on"
+      - "light.turn_on"
+      - "light.turn_off"
+```
+
+If `allowed_services` is non-empty, any rule calling a service not on the list will be rejected.
 
 ### Example: Activate a scene
 
