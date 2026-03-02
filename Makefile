@@ -77,7 +77,10 @@ status:
 
 .PHONY: logs
 logs:
-	journalctl --user -u $(AGENT_UNIT) -u $(DBUS_UNIT) -f --no-pager
+	@# Filter noisy signal-cli blocks; keep full blocks for actionable messages.
+	@# Actionable = has a Body: line, and (if globals.command_prefix is set) the Body starts with that prefix.
+	journalctl --user -u $(AGENT_UNIT) -u $(DBUS_UNIT) -f --no-pager -o short-iso | \
+		python3 ./scripts/logs_filter.py --rules ./rules.yaml
 
 .PHONY: uninstall
 uninstall:
