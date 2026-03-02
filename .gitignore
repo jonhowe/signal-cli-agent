@@ -223,3 +223,4 @@ rules.d/calendar.yaml
 user-generated/*
 rules.d/bedroom_on.yaml
 litellm_token
+rest_api_token
