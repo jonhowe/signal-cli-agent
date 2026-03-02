@@ -133,6 +133,9 @@ def log_warn(msg: str) -> None:
 def log_err(msg: str) -> None:
     logger.error(msg)
 
+def log_debug(msg: str) -> None:
+    logger.debug(msg)
+
 
 # -----------------------------
 # Utilities
@@ -631,7 +634,7 @@ class SignalAgent:
 
         is_group = looks_like_group_id(group_id)
         if is_group and g.deny_groups:
-            log_info(f"(group ignored) {sender}: {message}")
+            log_debug(f"(group ignored) {sender}: {message}")
             return
 
         # Optional command prefix gate (applies to all matching + NLP).
