@@ -2,14 +2,15 @@
 
 Signal CLI Agent is a **rule-driven automation engine** that connects to `signal-cli` via DBus and executes **local actions** in response to **trusted** Signal messages.
 
-It lets you securely trigger commands on a host using Signal as the control channel — without exposing SSH, a web server, or a public API.
+It lets you securely trigger actions on a host using Signal as the control channel — without exposing SSH, a web server, or a public API.
 
-For the full rule schema and configuration reference, see:
-
+**Rule schema / config reference (authoritative):**  
 👉 **[docs/RULES.md](docs/RULES.md)**
 
-For optional "less strict" prompts via LiteLLM (AI routing), see:
+**Plugin reference (authoritative):**  
+👉 **[docs/PLUGINS.md](docs/PLUGINS.md)**
 
+**Optional “less strict” prompts via LiteLLM (NLP routing):**  
 👉 **[docs/NLP.md](docs/NLP.md)**
 
 ---
@@ -19,7 +20,8 @@ For optional "less strict" prompts via LiteLLM (AI routing), see:
 - [Overview](#overview)
 - [Why Use This?](#why-use-this)
 - [Architecture](#architecture)
-- [Plugin Architecture](#plugin-architecture)
+- [Command Prefix Gate](#command-prefix-gate)
+- [Plugins](#plugins)
 - [NLP Routing (LiteLLM)](#nlp-routing-litellm)
 - [Installation](#installation)
   - [Prerequisites](#prerequisites)
@@ -43,16 +45,13 @@ For optional "less strict" prompts via LiteLLM (AI routing), see:
 
 Signal CLI Agent:
 
-- Listens for incoming Signal messages (via DBus)
-- Loads rules from YAML files
+- Listens for Signal messages (via `signal-cli` DBus daemon)
+- Loads configuration from YAML
 - Matches messages against sender + trigger conditions
-- Executes an action (command or plugin)
+- Executes an action (**command** or **plugin**)
 - Sends results back via Signal
 
 Rules are defined in YAML files and can be extended without modifying the agent code.
-
-**Rule reference (required reading for anything beyond basics):**  
-👉 **[docs/RULES.md](docs/RULES.md)**
 
 ---
 
@@ -72,7 +71,7 @@ Common use cases:
 - Log inspection (“tail journal 50”)
 - Service health checks
 - Lightweight automation for trusted contacts
-- API status queries (Home Assistant / monitoring / internal tools)
+- API reads/writes (Home Assistant / monitoring / internal tools)
 
 ---
 
@@ -83,85 +82,27 @@ flowchart TD
   A[Your Phone] --> B[Signal Message]
   B --> C["signal-cli (DBus daemon)"]
   C --> D[signal-agent.py]
-  D --> E[Load rules.yaml]
-  D --> F[Load rules.d/*.yaml]
-  D --> G[Match sender + trigger]
-  D --> H[Execute action]
-  D --> I[Send response via Signal]
+
+  D --> P{Command prefix gate?}
+  P -- "Missing prefix" --> X[Ignore silently]
+  P -- "Prefix present" --> E[Load rules.yaml + rules.d/*.yaml]
+
+  E --> M{Match rule?}
+  M -- Yes --> R[Execute action<br/>command OR plugin]
+  M -- No --> N{NLP enabled<br/>and eligible rules?}
+  N -- Yes --> L[LiteLLM routes to allowed rule]
+  L --> R
+  N -- No --> Y[No action]
+
+  R --> S[Format reply + chunking]
+  S --> T[Send response via Signal]
 ```
 
 ---
 
-## Plugin Architecture
+## Command Prefix Gate
 
-In addition to `command`-based rules, the agent supports **plugin-style rules** for structured integrations.
-
-Why plugins?
-
-- Avoid shelling out to helper scripts for common “API read” workflows
-- Standardize request handling (timeouts, errors, formatting)
-- Make rules easier to understand and safer by constraining what they can do
-
-Example use case (read-only Home Assistant sensor query):
-
-```yaml
-- name: ha_temp
-  sender: "+15551234567"
-  trigger: "temp?"
-  match: exact
-
-  type: home_assistant
-  home_assistant:
-    action: get_state
-    entity_id: sensor.example_temperature
-    label: "Temperature"
-
-  reply_mode: output
-```
-
-Example use case (state change: activate a Home Assistant scene):
-
-```yaml
-- name: bedroom_on
-  sender: "+15551234567"
-  trigger: "bedroom on"
-  match: exact
-
-  type: home_assistant_service
-  home_assistant:
-    domain: scene
-    service: turn_on
-    entity_id: scene.bedroom_on
-    ok_message: "Bedroom scene activated"
-
-  reply_mode: output
-```
-
-Notes:
-
-- Plugins are executed **on-demand** per message (no persistent HTTP connections).
-- Read-only plugins (GET) and state-changing plugins (POST) are both supported.
-- The full plugin schema and supported actions are documented in **[docs/PLUGINS.md](docs/PLUGINS.md)**.
-
----
-
-## NLP Routing (LiteLLM)
-
-Optionally, the agent can use a local **LiteLLM proxy** to route free-form text
-to a **pre-approved rule** when no rule matches normally.
-
-This preserves the safety model:
-
-- Only rules explicitly marked `nlp.enabled: true` are eligible.
-- Sender allowlists and rate limits still apply.
-- The model can only choose from the allowlisted rule names.
-
-See: **[docs/NLP.md](docs/NLP.md)**
-
-### Command prefix gate (recommended)
-
-To prevent accidental triggers (especially with NLP enabled), you can require a
-prefix on **all** commands.
+To prevent accidental triggers (especially with NLP enabled), you can require a prefix on **all commands**.
 
 Set this in `rules.yaml` under `globals`:
 
@@ -178,7 +119,79 @@ Then users must send:
 ! can you turn on the bedroom lights?
 ```
 
-The prefix is stripped before rule matching and before NLP routing.
+The prefix is stripped **before** rule matching and **before** NLP routing.
+
+---
+
+## Plugins
+
+In addition to `command`-based rules, the agent supports **plugin-style rules** for structured integrations (HTTP reads, Home Assistant, etc.).
+
+Why plugins?
+
+- Avoid shelling out to helper scripts for common “API read/write” workflows
+- Standardize request handling (timeouts, errors, formatting)
+- Constrain behavior for safety (vs arbitrary shell)
+
+### Example: read-only Home Assistant sensor query (plugin)
+
+```yaml
+- name: ha_temp
+  sender: ["+15551234567"]
+  trigger: "temp?"
+  match: exact
+
+  type: home_assistant
+  home_assistant:
+    action: get_state
+    entity_id: sensor.example_temperature
+    label: "Temperature"
+
+  reply_mode: output
+```
+
+### Example: state change — activate a Home Assistant scene (plugin)
+
+```yaml
+- name: bedroom_on
+  sender: ["+15551234567"]
+  trigger: "bedroom on"
+  match: exact
+
+  type: home_assistant_service
+  home_assistant_service:
+    domain: scene
+    service: turn_on
+    entity_id: scene.bedroom_on
+    label: "Bedroom"
+
+  reply_mode: output
+```
+
+**Important:** The full plugin schema, supported actions, and recommended safety defaults are documented in:  
+👉 **[docs/PLUGINS.md](docs/PLUGINS.md)**
+
+---
+
+## NLP Routing (LiteLLM)
+
+Optionally, the agent can use a local **LiteLLM proxy** to route free-form text to a **pre-approved rule** when no rule matches normally.
+
+This preserves the safety model:
+
+- Only rules explicitly marked `nlp.enabled: true` are eligible
+- The model can only choose from `globals.nlp.allowed_rules`
+- Sender allowlists and rate limits still apply
+
+See: **[docs/NLP.md](docs/NLP.md)**
+
+### Minimum wiring (common gotchas)
+
+To enable NLP routing you need **all three**:
+
+1) `globals.nlp.enabled: true` in `rules.yaml`
+2) Include rule names in `globals.nlp.allowed_rules`
+3) Mark each eligible rule with `nlp.enabled: true` (and optionally `phrases:`)
 
 ---
 
@@ -282,10 +295,10 @@ This repo also ships **templates**, which get rendered into real files by `confi
 
 **Important behavior:**
 
-- `configure.py` renders only the **shipped templates** under `templates/`.
-- Your own custom rule files placed in `rules.d/` are treated as **user-owned** and are not deleted by project tooling.
+- `configure.py` renders only the **shipped templates** under `templates/`
+- Your own custom rule files placed in `rules.d/` are treated as **user-owned** and are not deleted by project tooling
 
-For the full rule schema, supported fields, match modes, sender allowlists, safe patterns, reply formatting, and plugins:
+For full schema, match modes, sender allowlists, safe patterns, reply formatting, and plugins:
 
 👉 **[docs/RULES.md](docs/RULES.md)**
 
@@ -336,10 +349,10 @@ Simulate a message locally (no DBus, no Signal send):
 python3 signal-agent.py ./rules.yaml \
   --test \
   --sender "+15551234567" \
-  --message "disk?"
+  --message "! disk?"
 ```
 
-This prints what would be sent back (based on matching rules).
+Note: if you enable `globals.command_prefix`, your test message must include the prefix.
 
 ---
 
@@ -376,15 +389,12 @@ Yes. Use `sender:` as a list. See **[docs/RULES.md](docs/RULES.md)**.
 ### What if multiple rules match?
 The agent executes the **first matching rule** and stops.
 
-### Can I call APIs?
-Yes:
-- For custom APIs: call a helper script via `command:`
-- For structured integrations: use a plugin rule type (see “Plugin Architecture” above)
-
-Full examples are documented in **[docs/RULES.md](docs/RULES.md)**.
-
 ### Where should I store secrets (tokens, API keys)?
 Do **not** commit secrets. Store them in protected files (e.g., `~/.config/...`) with `chmod 600`.
+
+### Why are `signal-cli` logs so noisy?
+`signal-cli` logs many message-related events (typing, receipts, sync metadata).  
+For “what actually executed,” rely on the **agent logs** (`signal-agent.service`) which reflect rule evaluation and execution.
 
 ---
 
@@ -392,7 +402,7 @@ Do **not** commit secrets. Store them in protected files (e.g., `~/.config/...`)
 
 Proposed ideas:
 
-- Expand plugins (start with **read-only GET**, then optional **POST** actions with guardrails)
+- Expand plugins (read-only GET first, then guarded POST actions)
 - Docker deployment option
 - Role-based access control / authorization tiers
 - Metrics and enhanced logging
