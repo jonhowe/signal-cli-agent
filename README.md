@@ -10,6 +10,9 @@ It lets you securely trigger actions on a host using Signal as the control chann
 **Plugin reference (authoritative):**  
 👉 **[docs/PLUGINS.md](docs/PLUGINS.md)**
 
+**External REST API (optional outbound sends):**  
+👉 **[docs/REST_API.md](docs/REST_API.md)**
+
 **Optional “less strict” prompts via LiteLLM (NLP routing):**  
 👉 **[docs/NLP.md](docs/NLP.md)**
 
@@ -22,6 +25,7 @@ It lets you securely trigger actions on a host using Signal as the control chann
 - [Architecture](#architecture)
 - [Command Prefix Gate](#command-prefix-gate)
 - [Plugins](#plugins)
+- [External REST API](#external-rest-api)
 - [NLP Routing (LiteLLM)](#nlp-routing-litellm)
 - [Installation](#installation)
   - [Prerequisites](#prerequisites)
@@ -170,6 +174,27 @@ Why plugins?
 
 **Important:** The full plugin schema, supported actions, and recommended safety defaults are documented in:  
 👉 **[docs/PLUGINS.md](docs/PLUGINS.md)**
+
+---
+
+## External REST API
+
+The agent can optionally expose a **local REST API** for sending outbound Signal messages.
+
+This is useful for:
+
+- CI/CD notifications
+- monitoring alerts
+- home lab / internal tooling
+
+Security controls include:
+
+- Bearer token auth (token loaded from a local file)
+- Destination allowlist (`allowed_destinations`)
+- Optional client IP allowlist
+- Size limits + rate limiting
+
+See: **[docs/REST_API.md](docs/REST_API.md)**
 
 ---
 

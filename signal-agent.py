@@ -44,6 +44,7 @@ import shlex
 import signal as pysignal
 import subprocess
 import sys
+import threading
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
@@ -56,6 +57,8 @@ import yaml
 # Plugin support (Phase 0–1)
 from plugins.registry import get_plugin
 from plugins.nlp_router import route_message
+from plugins.services.base import ServiceContext
+from plugins.services.registry import all_services
 
 # Optional imports: only needed in non-test mode
 try:
@@ -590,10 +593,69 @@ class SignalAgent:
 
         self.rules_loader.load_if_changed()
 
+        # Start optional long-running service plugins (e.g., REST API).
+        self._services = []
+        self._start_services()
+
         self.signal.onMessageReceived = self.on_message_received
         self.signal.onMessageReceivedV2 = self.on_message_received_v2
         self.signal.onSyncMessageReceived = self.on_sync_message_received
         self.signal.onSyncMessageReceivedV2 = self.on_sync_message_received_v2
+
+    def shutdown(self) -> None:
+        """Best-effort shutdown for background services."""
+        for svc in getattr(self, "_services", []) or []:
+            try:
+                svc.stop()
+            except Exception:
+                continue
+
+    def _start_services(self) -> None:
+        globals_raw = self.rules_loader.globals_raw
+        ctx = ServiceContext(send_message=self._send_message_threadsafe, dry_run=bool(self.global_dry_run))
+
+        for svc in all_services():
+            try:
+                svc.validate(globals_raw)
+                svc.start(globals_raw, ctx)
+                self._services.append(svc)
+            except Exception as e:
+                log_err(f"Failed to start service plugin {getattr(svc, 'name', 'unknown')}: {e}")
+
+    def _send_message_threadsafe(self, target: str, payload: str) -> None:
+        """Send a Signal message from any thread.
+
+        Service plugins may run their own threads (e.g., HTTP servers). pydbus/GLib
+        objects should be interacted with from the GLib main thread.
+        """
+
+        # If we're already on the main thread, send directly.
+        if threading.current_thread() is threading.main_thread():
+            self.maybe_send(target, payload, dry_run=False)
+            return
+
+        if GLib is None:
+            raise RuntimeError("GLib not available; cannot send message thread-safely")
+
+        done = threading.Event()
+        err: Dict[str, Any] = {"e": None}
+
+        def _do_send() -> bool:
+            try:
+                self.maybe_send(target, payload, dry_run=False)
+            except Exception as e:
+                err["e"] = e
+            finally:
+                done.set()
+            return False  # remove idle handler
+
+        # Schedule send in the GLib main loop.
+        GLib.idle_add(_do_send)
+
+        if not done.wait(timeout=10.0):
+            raise TimeoutError("Timed out sending Signal message")
+        if err["e"] is not None:
+            raise RuntimeError(err["e"])
 
     def on_message_received(self, timestamp: int, sender: str, group_id: Any, message: str, attachments: Any) -> None:
         self.handle_incoming("msg", timestamp, sender, None, group_id, message)
@@ -1269,7 +1331,17 @@ def main() -> int:
     if GLib is None:
         raise RuntimeError("GLib not available; cannot run main loop")
 
-    GLib.MainLoop().run()
+    loop = GLib.MainLoop()
+    try:
+        loop.run()
+    except KeyboardInterrupt:
+        # SIGINT handler raises KeyboardInterrupt to break the loop.
+        pass
+    finally:
+        try:
+            agent.shutdown()
+        except Exception:
+            pass
     return 0
 
 

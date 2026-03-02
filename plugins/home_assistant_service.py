@@ -7,12 +7,23 @@ import re
 from typing import Any, Dict, Optional, Tuple
 
 from .base import BasePlugin, PluginResult
-from .http_common import check_private_file, http_request
+from .http_common import HttpCommonError, check_private_file, http_request, parse_and_validate_url
 
 
 _DOMAIN_RE = re.compile(r"^[a-zA-Z0-9_]+$")
 _SERVICE_RE = re.compile(r"^[a-zA-Z0-9_]+$")
 _ENTITY_ID_RE = re.compile(r"^[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+$")
+
+
+def _norm_list(v: Any) -> list[str]:
+    if v is None:
+        return []
+    if isinstance(v, (list, tuple)):
+        return [str(x).strip() for x in v if str(x).strip()]
+    if isinstance(v, str):
+        return [v.strip()] if v.strip() else []
+    s = str(v).strip()
+    return [s] if s else []
 
 
 def _read_token_file(path: str) -> str:
@@ -79,6 +90,15 @@ class HomeAssistantServicePlugin(BasePlugin):
         if not url:
             raise ValueError("home_assistant_service.url is required (set in globals or per rule)")
 
+        # Shared HTTP safety defaults (scheme + allowed_hosts allowlist)
+        http_defaults = dict((globals_raw.get("plugin_http") or {}))
+        allowed_schemes = _norm_list(cfg.get("allowed_schemes", http_defaults.get("allowed_schemes", ["http", "https"])))
+        allowed_hosts = _norm_list(cfg.get("allowed_hosts", http_defaults.get("allowed_hosts", [])))
+        try:
+            parse_and_validate_url(url, allowed_schemes=allowed_schemes, allowed_hosts=allowed_hosts)
+        except HttpCommonError as e:
+            raise ValueError(f"home_assistant_service.url invalid: {e}")
+
         token_file = str(_pick(cfg, "token_file", "")).strip()
         if not token_file:
             raise ValueError("home_assistant_service.token_file is required (set in globals or per rule)")
@@ -93,6 +113,16 @@ class HomeAssistantServicePlugin(BasePlugin):
             raise ValueError("home_assistant_service.domain must be a non-empty slug (letters, digits, underscore)")
         if not service or not _SERVICE_RE.match(service):
             raise ValueError("home_assistant_service.service must be a non-empty slug (letters, digits, underscore)")
+
+        # Optional allowlist to restrict what can be called.
+        allowed_services = _norm_list(cfg.get("allowed_services"))
+        if allowed_services:
+            key = f"{domain}.{service}".lower()
+            allowed_lower = {s.lower() for s in allowed_services}
+            if key not in allowed_lower:
+                raise ValueError(
+                    f"home_assistant_service {key} not in allowed_services allowlist (set globals.home_assistant_service.allowed_services)"
+                )
 
         entity_id, entity_ids = _normalize_entity_ids(cfg.get("entity_id"))
         if entity_id and not _ENTITY_ID_RE.match(entity_id):
@@ -132,8 +162,8 @@ class HomeAssistantServicePlugin(BasePlugin):
 
             timeout_sec = int(cfg.get("timeout_sec", 6))
             http_cfg = dict(globals_raw.get("plugin_http") or {})
-            allowed_hosts = list(http_cfg.get("allow_hosts") or [])
-            allowed_schemes = list(http_cfg.get("allowed_schemes") or ["http", "https"])
+            allowed_hosts = _norm_list(cfg.get("allowed_hosts", http_cfg.get("allowed_hosts", [])))
+            allowed_schemes = _norm_list(cfg.get("allowed_schemes", http_cfg.get("allowed_schemes", ["http", "https"])))
             follow_redirects = bool(http_cfg.get("follow_redirects", False))
             max_response_bytes = int(http_cfg.get("max_response_bytes", 250000))
             max_body_chars = int(cfg.get("max_body_chars", 4000))

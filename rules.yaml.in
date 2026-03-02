@@ -107,6 +107,52 @@ globals:
     follow_redirects: false
 
   # ----------------------------
+  # External REST API (optional)
+  # ----------------------------
+  #
+  # Purpose:
+  #   Allow trusted *local* callers to ask the agent to send outbound Signal messages
+  #   via an authenticated REST endpoint.
+  #
+  # Security model:
+  #   - Bearer token auth (token_file)
+  #   - Destination allowlist (allowed_destinations)
+  #   - Optional client IP allowlist (allowed_client_ips)
+  #   - Size limits + rate limiting
+  #
+  # Full documentation: docs/REST_API.md
+  rest_api:
+    enabled: false
+
+    # Strongly recommended: bind to localhost only and use a reverse proxy for TLS.
+    bind_host: "127.0.0.1"
+    bind_port: 8787
+
+    # File containing the Bearer token (recommended: chmod 600)
+    token_file: ""
+    require_private_token_file: true
+
+    # REQUIRED for safety: destinations (E.164 numbers) that this API is allowed to send to.
+    # If empty: deny all.
+    allowed_destinations: []
+
+    # Optional: allow only these client IPs (useful if bind_host is not localhost).
+    allowed_client_ips: ["127.0.0.1"]
+
+    # Request/message safety caps
+    max_request_bytes: 32768
+    max_message_chars: 3500
+    max_recipients_per_request: 1
+
+    # Optional chunking
+    split_long_messages: true
+    chunk_size: 1400
+    numbered_chunks: true
+
+    # Rate limiting (0 disables)
+    max_requests_per_minute: 60
+
+  # ----------------------------
   # Plugin: home_assistant (READ-ONLY)
   # ----------------------------
   #
