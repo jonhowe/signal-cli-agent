@@ -1,0 +1,20 @@
+version: "3.8"
+services:
+  signal-agent:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    image: signal-cli-agent:dev
+    container_name: signal-agent-dev
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - XDG_CONFIG_HOME=/config
+      - XDG_DATA_HOME=/data
+      - SIGNAL_CLI_CONFIG=/data/signal-cli
+      - DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dbus.sock
+    volumes:
+      - ../..:/app
+      - ../../config:/config
+      - ../../data:/data
+    entrypoint: ["/usr/bin/tini","--","/entrypoint.sh"]

@@ -130,3 +130,19 @@ Successful response:
 - Configuration is read at agent startup. If you change the REST API config, restart the agent.
 - If you rotate the token file contents, the REST API will pick it up automatically (it reloads the token file when it changes).
 - If you want TLS, put a reverse proxy (nginx/Caddy) in front of it and keep the agent bound to localhost.
+
+
+## Docker notes
+
+When running via Docker (Option A: internal DBus), the REST API runs inside the container.
+If you use `network_mode: host` (recommended for simplest Linux setup), binding the API to `127.0.0.1` makes it reachable on the host at `http://127.0.0.1:<port>`.
+
+If you use bridge networking instead, either:
+- bind to `0.0.0.0` inside the container and publish ports, or
+- keep `127.0.0.1` and use `docker exec`/in-container calls only.
+
+### DBus account selection
+
+If your `signal-cli` daemon is started in **multi-account** mode (no `-a <ACCOUNT>`), DBus send methods
+live on the account object path (`/org/asamk/Signal/_<number>`). Set `globals.signal.account` in
+`rules.yaml` so the agent/REST API uses the correct DBus object.

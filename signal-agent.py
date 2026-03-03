@@ -334,14 +334,31 @@ def send_signal_message(signal_obj: Any, recipient: str, message: str) -> None:
     """
     signal-cli DBus signatures vary by version. Try several common forms.
     """
+    # pydbus may return a CompositeObject where methods are not exposed as direct
+    # attributes (depending on introspection and interface merging). In those
+    # cases, methods are still available on the concrete interface proxy.
+    def _send_callable(obj: Any):
+        if hasattr(obj, "sendMessage"):
+            return obj.sendMessage
+        # CompositeObject can act like a mapping of interfaces.
+        try:
+            iface = obj["org.asamk.Signal"]
+            if hasattr(iface, "sendMessage"):
+                return iface.sendMessage
+        except Exception:
+            pass
+        raise AttributeError("sendMessage")
+
     if not isinstance(message, str):
         message = str(message)
 
+    send_fn = _send_callable(signal_obj)
+
     attempts = [
-        lambda: signal_obj.sendMessage(message, [], [recipient]),
-        lambda: signal_obj.sendMessage(message, [recipient]),
-        lambda: signal_obj.sendMessage(message, [], recipient),
-        lambda: signal_obj.sendMessage(message, recipient),
+        lambda: send_fn(message, [], [recipient]),
+        lambda: send_fn(message, [recipient]),
+        lambda: send_fn(message, [], recipient),
+        lambda: send_fn(message, recipient),
     ]
     last_err: Optional[Exception] = None
     for fn in attempts:
@@ -585,13 +602,15 @@ class SignalAgent:
         # can cause double logs / unintended cooldown blocks.
         self._recent_events: deque[Tuple[int, str, str, str]] = deque(maxlen=200)
 
+        # Load config before connecting to DBus so we can determine which
+        # DBus object path to use for multi-account signal-cli daemons.
+        self.rules_loader.load_if_changed()
+
         self.bus = SessionBus()
-        self.signal = self.bus.get("org.asamk.Signal")
+        self.signal = self._connect_signal_proxy()
 
         log_info("✓ Connected to org.asamk.Signal on the session bus")
         log_info(f"Listening… (root rules: {rules_path})")
-
-        self.rules_loader.load_if_changed()
 
         # Start optional long-running service plugins (e.g., REST API).
         self._services = []
@@ -601,6 +620,63 @@ class SignalAgent:
         self.signal.onMessageReceivedV2 = self.on_message_received_v2
         self.signal.onSyncMessageReceived = self.on_sync_message_received
         self.signal.onSyncMessageReceivedV2 = self.on_sync_message_received_v2
+
+    def _connect_signal_proxy(self):
+        """Return a pydbus proxy for the correct signal-cli DBus object.
+
+        signal-cli exposes methods like sendMessage on an account-specific object
+        path when the daemon is started in multi-account mode (i.e., without
+        "-a <ACCOUNT>"). In that case, methods live at:
+
+            /org/asamk/Signal/_<phonenumber-without-leading-plus>
+
+        If the daemon is started with "-a", methods are available directly on
+        /org/asamk/Signal.
+
+        We support both by:
+          1) Using globals.signal.account (preferred) or globals.admin
+          2) Trying the account object path first (if we have an account)
+          3) Falling back to the root object path
+        """
+
+        def _digits_only(e164: str) -> str:
+            s = (e164 or "").strip()
+            if s.startswith("+"):
+                s = s[1:]
+            s = "".join(ch for ch in s if ch.isdigit())
+            return s
+
+        globals_raw = self.rules_loader.globals_raw or {}
+        account = None
+        try:
+            account = (globals_raw.get("signal") or {}).get("account")
+        except Exception:
+            account = None
+        if not account:
+            account = globals_raw.get("admin")
+
+        digits = _digits_only(str(account)) if account else ""
+        if digits:
+            obj_path = f"/org/asamk/Signal/_{digits}"
+            try:
+                proxy = self.bus.get("org.asamk.Signal", obj_path)
+                # In multi-account mode, sendMessage lives on the account object.
+                # Don't rely on hasattr() here because pydbus may return a
+                # CompositeObject that doesn't expose methods as direct
+                # attributes even though calls succeed.
+                log_info(f"Using signal-cli account DBus object: {obj_path}")
+                return proxy
+            except Exception as e:
+                log_warn(f"Failed to connect to account DBus object {obj_path}: {e}")
+
+        # Fallback: single-account daemon exposes methods on the root object.
+        proxy = self.bus.get("org.asamk.Signal")
+        if digits:
+            log_warn(
+                "Falling back to /org/asamk/Signal. If you started signal-cli without "
+                "'-a <ACCOUNT>', methods like sendMessage live on /org/asamk/Signal/_<number>."
+            )
+        return proxy
 
     def shutdown(self) -> None:
         """Best-effort shutdown for background services."""

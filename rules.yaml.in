@@ -15,6 +15,20 @@
 
 globals:
   # ----------------------------
+  # signal-cli account selection (DBus)
+  # ----------------------------
+  #
+  # If signal-cli is started in multi-account DBus mode (daemon started without
+  # "-a <ACCOUNT>"), DBus methods like sendMessage live on an account-specific
+  # object path:
+  #   /org/asamk/Signal/_<phonenumber-without-leading-plus>
+  #
+  # Set this to ensure the agent targets the correct DBus object.
+  # If omitted, the agent falls back to globals.admin.
+  signal:
+    account: "@PHONE@"
+
+  # ----------------------------
   # Core agent behavior
   # ----------------------------
 
@@ -183,15 +197,15 @@ globals:
   #
   # 1) Read a sensor state
   #
-  # - name: custody_week
+  # - name: rotation_week
   #   sender: ["@PHONE@"]
   #   trigger: "what week is it?"
   #   match: exact
   #   type: home_assistant
   #   home_assistant:
   #     action: get_state
-  #     entity_id: sensor.custody_week_a_or_b
-  #     label: "Custody week"
+  #     entity_id: sensor.rotation_week_a_or_b
+  #     label: "Rotation week"
   #     # Optional extraction:
   #     # value: state
   #     # json_path: attributes.unit_of_measurement
@@ -200,7 +214,7 @@ globals:
   #
   # 2) Render a template (read-only) for full control of output text
   #
-  # - name: custody_week_template
+  # - name: rotation_week_template
   #   sender: ["@PHONE@"]
   #   trigger: "week?"
   #   match: exact
@@ -208,7 +222,7 @@ globals:
   #   home_assistant:
   #     action: template
   #     template: >-
-  #       It is currently {{ states('sensor.custody_week_a_or_b') }}
+  #       It is currently {{ states('sensor.rotation_week_a_or_b') }}
   #   reply_mode: bare
 
   # ----------------------------
