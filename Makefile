@@ -21,18 +21,27 @@ TEST_MESSAGE ?= disk?
 .PHONY: help
 help:
 	@echo "Targets:"
-	@echo "  quickstart  - configure + install + start"
-	@echo "  configure   - run configure.py (generate rules + units + example rule)"
-	@echo "  install     - configure + install user units + daemon-reload"
-	@echo "  start       - enable + start services"
-	@echo "  stop        - stop services"
-	@echo "  restart     - restart services"
-	@echo "  status      - show status"
-	@echo "  logs        - tail logs"
-	@echo "  uninstall   - stop + disable + remove INSTALLED user units (no repo files touched)"
-	@echo "  clean       - remove repo-generated files ONLY (keeps user rules in rules.d/)"
-	@echo "  pytest      - run unit tests (pytest)"
-	@echo "  test        - run agent in --test mode locally"
+	@echo "  quickstart         - configure + install + start"
+	@echo "  configure          - run configure.py (generate rules + units + example rule)"
+	@echo "  install            - configure + install user units + daemon-reload"
+	@echo "  start              - enable + start services"
+	@echo "  stop               - stop services"
+	@echo "  restart            - restart services"
+	@echo "  status             - show status"
+	@echo "  logs               - tail logs (systemd install)"
+	@echo "  uninstall          - stop + disable + remove INSTALLED user units (no repo files touched)"
+	@echo "  clean              - remove repo-generated files ONLY (keeps user rules in rules.d/)"
+	@echo "  pytest             - run unit tests (pytest)"
+	@echo "  test               - run agent in --test mode locally"
+	@echo ""
+	@echo "Docker Targets:"
+	@echo "  docker-build       - build container"
+	@echo "  docker-up          - bring up container"
+	@echo "  docker-down        - stop container"
+	@echo "  docker-logs        - tail raw container logs"
+	@echo "  docker-logs-filter - tail filtered logs (only actionable message blocks)"
+	@echo "  docker-link        - link device"
+	@echo "  docker-sync        - sync contacts/groups"
 	@echo ""
 	@echo "Test overrides:"
 	@echo "  make test TEST_SENDER=+15551234567 TEST_MESSAGE='disk?'"
@@ -107,6 +116,7 @@ test:
 	@echo "  sender:  $(TEST_SENDER)"
 	@echo "  message: $(TEST_MESSAGE)"
 	python3 ./signal-agent.py ./rules.yaml --test --sender "$(TEST_SENDER)" --message "$(TEST_MESSAGE)"
+
 .PHONY: pytest
 pytest:
 	pytest -q
@@ -117,8 +127,9 @@ pytest:
 # ----------------------------
 COMPOSE_FILE := docker/compose/docker-compose.yml
 COMPOSE_DEV_FILE := docker/compose/docker-compose.dev.yml
+DOCKER_RULES ?= ./config/rules.yaml
 
-.PHONY: docker-build docker-up docker-down docker-logs docker-link docker-sync
+.PHONY: docker-build docker-up docker-down docker-logs docker-logs-filter docker-link docker-sync
 
 docker-build:
 	docker compose -f $(COMPOSE_FILE) build
@@ -130,7 +141,16 @@ docker-down:
 	docker compose -f $(COMPOSE_FILE) down
 
 docker-logs:
-	docker logs -f signal-agent
+	docker compose -f $(COMPOSE_FILE) logs -f --no-color signal-agent
+
+docker-logs-filter:
+	@# Show only full signal-cli message blocks where Body starts with the command prefix ("!").
+	docker compose -f $(COMPOSE_FILE) logs -f --no-color signal-agent 2>&1 | \
+		sed -u 's/^[^|]*| //' | \
+		awk 'function flush(){ if (keep && buf!="") print buf "\n"; buf=""; keep=0 } \
+		     /^Envelope from:/ { flush(); buf=$$0 ORS; next } \
+		     buf!="" { buf=buf $$0 ORS; if ($$0 ~ /^[[:space:]]*Body:[[:space:]]*!/) keep=1; if ($$0=="") flush(); next } \
+		     END { flush() }'
 
 docker-link:
 	docker compose -f $(COMPOSE_FILE) run --rm signal-agent link

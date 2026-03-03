@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+.env
+config/
+data/
+rest_api_token
+ha_token
+litellm_token
+*.zip
+.git/
