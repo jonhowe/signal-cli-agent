@@ -110,3 +110,30 @@ test:
 .PHONY: pytest
 pytest:
 	pytest -q
+
+
+# ----------------------------
+# Docker (Option A: internal DBus)
+# ----------------------------
+COMPOSE_FILE := docker/compose/docker-compose.yml
+COMPOSE_DEV_FILE := docker/compose/docker-compose.dev.yml
+
+.PHONY: docker-build docker-up docker-down docker-logs docker-link docker-sync
+
+docker-build:
+	docker compose -f $(COMPOSE_FILE) build
+
+docker-up:
+	docker compose -f $(COMPOSE_FILE) up --build -d
+
+docker-down:
+	docker compose -f $(COMPOSE_FILE) down
+
+docker-logs:
+	docker logs -f signal-agent
+
+docker-link:
+	docker compose -f $(COMPOSE_FILE) run --rm signal-agent link
+
+docker-sync:
+	docker compose -f $(COMPOSE_FILE) run --rm signal-agent sync

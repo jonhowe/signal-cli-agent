@@ -18,6 +18,40 @@ It lets you securely trigger actions on a host using Signal as the control chann
 
 ---
 
+
+## Docker (recommended)
+
+This project supports running **signal-cli + signal-cli-agent inside a single container** with an **internal session D-Bus** (Option A).
+The primary from-scratch provisioning flow is **manual device linking** (scan an ASCII QR code in the terminal).
+
+- Setup guide: `docs/DOCKER.md`
+
+Quick start:
+
+```bash
+# from repo root
+mkdir -p config data
+
+# Render rules.yaml with your phone number (replaces @PHONE@ placeholders)
+python3 configure.py --phone +1XXXXXXXXXX
+cp ./rules.yaml ./config/rules.yaml
+
+# 1) Build image
+make docker-build
+
+# 2) One-time provisioning (primary flow): link device via ASCII QR
+make docker-link
+
+# 3) (Recommended) sync once after linking
+make docker-sync
+
+# 4) Start the stack
+make docker-up
+
+# 5) Tail logs
+make docker-logs
+```
+
 ## Table of Contents
 
 - [Overview](#overview)

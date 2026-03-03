@@ -212,9 +212,7 @@ systemd/signal-agent.service
 systemd/signal-cli-dbus.service
 ha_token
 ha_get_state.py
-rules.d/custody_week.yaml
 rules.d/example-rules.yaml
-rules.d/custody-week.yaml
 .signal_agent_generated.json
 
 .generated-manifest.json
@@ -224,3 +222,6 @@ user-generated/*
 rules.d/bedroom_on.yaml
 litellm_token
 rest_api_token
+# Docker runtime
+config/
+data/
