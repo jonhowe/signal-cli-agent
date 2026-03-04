@@ -7,6 +7,7 @@ It lets you securely trigger actions on a host using Signal as the control chann
 ## Documentation
 
 - **Rules / configuration (authoritative):** 👉 **[docs/RULES.md](docs/RULES.md)**
+- **Example rules (walkthrough + samples):** 👉 **[docs/EXAMPLE_RULES.md](docs/EXAMPLE_RULES.md)**
 - **Plugins (authoritative):** 👉 **[docs/PLUGINS.md](docs/PLUGINS.md)**
 - **Docker details / troubleshooting:** 👉 **[docs/DOCKER.md](docs/DOCKER.md)**
 - **External REST API (optional outbound sends):** 👉 **[docs/REST_API.md](docs/REST_API.md)**
@@ -26,7 +27,7 @@ A prebuilt container image is published to GitHub Container Registry (GHCR):
 
 # Quick Start (Docker Compose + GHCR Image)
 
-This is the recommended “fresh machine” flow:
+This is the recommended flow:
 
 1) create a small working directory  
 2) pull the image  
@@ -68,8 +69,6 @@ services:
       - XDG_CONFIG_HOME=/config
       - XDG_DATA_HOME=/data
       - SIGNAL_CLI_CONFIG=/data/signal-cli
-      # If you run signal-cli in multi-account mode, you may need:
-      # - SIGNAL_ACCOUNT=+1XXXXXXXXXX
 
     volumes:
       - ./config:/config
@@ -101,6 +100,8 @@ After this step, you should see:
 - `./config/rules.yaml`
 - `./config/rules.d/…`
 
+If you want a guided walkthrough of what the generated rules look like and how to customize them, see: **[docs/EXAMPLE_RULES.md](docs/EXAMPLE_RULES.md)**.
+
 ---
 
 ## 5) Link the Signal device (scan QR)
@@ -123,7 +124,7 @@ To link:
 
 ---
 
-## 6) (Recommended) Sync once
+## 6) Sync once
 
 ```bash
 docker compose run --rm signal-agent sync
@@ -233,7 +234,8 @@ The prefix is stripped **before** rule matching and **before** NLP routing.
 
 In addition to `command`-based rules, the agent supports structured plugin rules (e.g., HTTP, Home Assistant, REST API, NLP routing).
 
-Full documentation: **[docs/PLUGINS.md](docs/PLUGINS.md)**
+Full documentation: **[docs/PLUGINS.md](docs/PLUGINS.md)**  
+Example rule walkthroughs: **[docs/EXAMPLE_RULES.md](docs/EXAMPLE_RULES.md)**
 
 ---
 
