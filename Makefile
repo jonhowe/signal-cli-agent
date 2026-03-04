@@ -40,6 +40,7 @@ help:
 	@echo "  docker-down        - stop container"
 	@echo "  docker-logs        - tail raw container logs"
 	@echo "  docker-logs-filter - tail filtered logs (only actionable message blocks)"
+	@echo "  docker-configure   - generate ./config from templates (runs configure.py inside the container)"
 	@echo "  docker-link        - link device"
 	@echo "  docker-sync        - sync contacts/groups"
 	@echo ""
@@ -52,8 +53,7 @@ quickstart: install start
 
 .PHONY: configure
 configure:
-	python3 ./configure.py
-
+	python3 ./configure.py --mode systemd
 .PHONY: install
 install: configure
 	mkdir -p "$(USER_SYSTEMD_DIR)"
@@ -126,10 +126,19 @@ pytest:
 # Docker (Option A: internal DBus)
 # ----------------------------
 COMPOSE_FILE := docker/compose/docker-compose.yml
-COMPOSE_DEV_FILE := docker/compose/docker-compose.dev.yml
 DOCKER_RULES ?= ./config/rules.yaml
 
-.PHONY: docker-build docker-up docker-down docker-logs docker-logs-filter docker-link docker-sync
+.PHONY: docker-configure
+
+docker-configure:
+	@if [ -z "$(PHONE)" ]; then \
+		echo "ERROR: set PHONE=+15551234567"; \
+		exit 2; \
+	fi
+	mkdir -p config data
+	docker compose -f $(COMPOSE_FILE) run --rm --build signal-agent python3 /app/configure.py --mode container --config-dir /config --phone "$(PHONE)"
+
+.PHONY: docker-build docker-up docker-down docker-logs docker-logs-filter docker-link docker-sync docker-configure
 
 docker-build:
 	docker compose -f $(COMPOSE_FILE) build
@@ -153,7 +162,7 @@ docker-logs-filter:
 		     END { flush() }'
 
 docker-link:
-	docker compose -f $(COMPOSE_FILE) run --rm signal-agent link
+	docker compose -f $(COMPOSE_FILE) run --rm --build signal-agent link
 
 docker-sync:
-	docker compose -f $(COMPOSE_FILE) run --rm signal-agent sync
+	docker compose -f $(COMPOSE_FILE) run --rm --build signal-agent sync

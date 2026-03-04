@@ -372,11 +372,20 @@ globals:
 # ----------------------------
 
 # The agent will load:
-#   1) this rendered rules.yaml
-#   2) every .yaml/.yml in rules_dir
+#   1) this rules.yaml
+#   2) every .yaml/.yml file in a rules directory
 #
-# This project uses rules.d as the production rules directory.
-rules_dir: "@REPO@/rules.d"
+# Default behavior (recommended):
+# - If rules_dir is omitted, the agent loads rules from a directory named "rules.d"
+#   next to this file (i.e., <rules.yaml dir>/rules.d).
+#
+# This default works well for both:
+# - Docker:  /config/rules.yaml + /config/rules.d
+# - Host:    ./rules.yaml + ./rules.d
+#
+# Optional override (absolute path recommended):
+# rules_dir: "/absolute/path/to/rules.d"
+
 
 # Optional inline rules can live here, but it's recommended to keep rules in rules.d/
 # rules:

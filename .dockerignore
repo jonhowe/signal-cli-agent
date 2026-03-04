@@ -4,10 +4,26 @@ __pycache__/
 *.pyd
 *.log
 .env
-config/
+*.zip
+.git/
+
+# runtime state / secrets / local artifacts
 data/
+config/
 rest_api_token
 ha_token
 litellm_token
-*.zip
+*.log
+
+# python noise
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# vcs / editor
 .git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store

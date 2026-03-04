@@ -65,5 +65,5 @@ RUN chmod +x /entrypoint.sh
 EXPOSE 8787
 
 # tini as PID1; exec entrypoint at a fixed location
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
+CMD ["run"]

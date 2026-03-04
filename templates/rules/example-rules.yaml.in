@@ -1,32 +1,40 @@
 rules:
-  - name: home_dir_list
+  # ----------------------------
+  # Shipped example rules
+  # ----------------------------
+  #
+  # These are intentionally *generic* and safe-ish examples.
+  #
+  # NOTE:
+  # - In Docker deployments, /config and /data are common bind mounts.
+  # - In non-container deployments, those paths may not exist — the examples
+  #   below will fall back gracefully.
+
+  - name: list_config
     sender:
       - "@PHONE@"
-    trigger: "home directory?"
+    trigger: "config?"
     match: exact
-    command: ["ls", "-lah", "/home/@USER@"]
+    command: ["sh", "-lc", "if [ -d /config ]; then ls -lah /config; else echo '/config not present'; fi"]
     cooldown_sec: 5
     max_runs_per_hour: 60
     split_reply: true
     chunk_size: 1400
     numbered_chunks: true
-    # default reply_mode is "full" (shows exit + command + output)
+    reply_mode: output
 
-  - name: journal_tail
+  - name: list_data
     sender:
       - "@PHONE@"
-    match: regex
-    trigger: "^tail journal (\\d+)$"
-    command_template: ["journalctl", "-n", "{n}", "--no-pager"]
-    args:
-      n:
-        type: int
-        min: 1
-        max: 200
-    timeout_sec: 8
+    trigger: "data?"
+    match: exact
+    command: ["sh", "-lc", "if [ -d /data ]; then ls -lah /data; else echo '/data not present'; fi"]
+    cooldown_sec: 5
+    max_runs_per_hour: 60
     split_reply: true
     chunk_size: 1400
     numbered_chunks: true
+    reply_mode: output
 
   - name: disk_usage
     sender:
@@ -53,7 +61,7 @@ rules:
   # This is intentionally generic and safe.
   #
   # Before using HTTP plugins, consider setting globals.plugin_http.allowed_hosts
-  # in rules.yaml.in (rendered to rules.yaml) to restrict which hosts can be queried.
+  # in rules.yaml (rendered from rules.yaml.in) to restrict which hosts can be queried.
   #
   # - name: local_health
   #   sender:

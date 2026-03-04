@@ -11,10 +11,7 @@ services:
       - XDG_CONFIG_HOME=/config
       - XDG_DATA_HOME=/data
       - SIGNAL_CLI_CONFIG=/data/signal-cli
-      - DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dbus.sock
       # - SIGNAL_ACCOUNT=+15551234567
     volumes:
       - ../../config:/config
       - ../../data:/data
-    # Primary setup helper: prints ASCII QR for linking
-    entrypoint: ["/usr/bin/tini","--","/entrypoint.sh"]
