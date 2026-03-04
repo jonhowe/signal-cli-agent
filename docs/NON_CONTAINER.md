@@ -1,35 +1,69 @@
 # Non-container operation (systemd / bare-metal)
 
 This document describes running **signal-cli-agent directly on a Linux host** (no Docker).
-It is optional / legacy; the recommended deployment is Docker (see repo root `README.md` and **[DOCKER.md](DOCKER.md)**).
+
+⚠️ This mode is optional / legacy.  
+The recommended deployment is Docker (see the repository root `README.md` and **[DOCKER.md](DOCKER.md)**).
 
 ---
 
-## What you need on the host
+## When should you use this mode?
 
-### Install `signal-cli`
+Only use non-container mode if:
 
-Official repository: https://github.com/AsamK/signal-cli  
-Official install docs: https://github.com/AsamK/signal-cli#installation
+- You intentionally do not want Docker
+- You need tight integration with host-level systemd services
+- You are operating in an environment where containers are not allowed
 
-You must **register and verify** your Signal number with `signal-cli` before the agent can be used.
+Otherwise, use the containerized setup.
 
-(Optional) Helper script:
+---
+
+# Installation
+
+## Prerequisites
+
+You must install and configure everything directly on the host.
+
+### 1) Install `signal-cli`
+
+Official repository:  
+https://github.com/AsamK/signal-cli  
+
+Official installation documentation:  
+https://github.com/AsamK/signal-cli#installation
+
+After installing, you must:
+
+- Register your phone number
+- Verify it via SMS or voice
+- Ensure `signal-cli` works from the CLI
+
+Example:
+
+```bash
+signal-cli -a +15551234567 register
+signal-cli -a +15551234567 verify 123456
+```
+
+(Optional helper script from this repo):
 
 ```bash
 ./scripts/update-signal-cli.sh
 ```
 
-### Install Python dependencies
+---
 
-At minimum:
+### 2) Install Python dependencies
+
+Minimum requirements:
 
 - Python 3.10+
 - `pydbus`
 - `PyYAML`
 - `python3-gi` (GLib bindings)
 
-Example (Debian/Ubuntu-ish):
+Example (Debian/Ubuntu):
 
 ```bash
 sudo apt-get update
@@ -39,7 +73,7 @@ pip3 install pydbus pyyaml
 
 ---
 
-## One-command setup (systemd --user)
+# Quick Start (systemd — recommended for non-container mode)
 
 From the repository root:
 
@@ -47,7 +81,20 @@ From the repository root:
 make quickstart
 ```
 
-If you prefer to run configure manually:
+This will:
+
+1) Run `configure.py` in **systemd mode**
+2) Render configuration templates into repo files
+3) Install systemd **user** services
+4) Start:
+   - signal-cli DBus daemon
+   - signal-cli-agent
+
+---
+
+## Manual setup (step-by-step)
+
+If you prefer manual setup:
 
 ```bash
 python3 ./configure.py --mode systemd --phone +1XXXXXXXXXX
@@ -55,13 +102,7 @@ make install
 make start
 ```
 
-What this does:
-
-1) Runs `configure.py` in **systemd mode** (renders templates into repo files)  
-2) Installs systemd **user** services  
-3) Starts both services (signal-cli DBus daemon + agent)
-
-Verify:
+Verify status:
 
 ```bash
 make status
@@ -70,48 +111,74 @@ make logs
 
 ---
 
-## How configuration works (non-container)
+# How configuration works (non-container mode)
 
-In non-container mode, generated files live in the repo:
+In non-container mode, files are generated inside the repository.
+
+Generated files:
 
 - `./rules.yaml` (rendered from `rules.yaml.in`)
-- `./rules.d/*.yaml` (rendered shipped examples + your own rules)
+- `./rules.d/*.yaml` (rendered examples + your custom rules)
 - `./systemd/*.service` (rendered from `templates/systemd/*.service.in`)
 
 The agent loads:
 
 - `./rules.yaml`
-- and (by default) `./rules.d/*.yaml`
+- `./rules.d/*.yaml` (by default)
+
+Unlike Docker mode, this setup relies on:
+
+- Host DBus session
+- Host-installed `signal-cli`
+- systemd user services
 
 ---
 
-## Boot-time startup (optional)
+# Writing Rules (non-container)
 
-Systemd **user** services normally start when you log in.
+You edit:
 
-To allow them to start at boot and keep running after logout:
+- `rules.yaml` (main configuration)
+- `rules.d/*.yaml` (rule definitions)
 
-```bash
-sudo loginctl enable-linger <your-username>
-```
+Authoritative documentation:
 
-Check:
+- **[docs/RULES.md](RULES.md)**
+- **[docs/PLUGINS.md](PLUGINS.md)**
+- **[docs/NLP.md](NLP.md)** (optional NLP routing)
+- **[docs/REST_API.md](REST_API.md)** (optional outbound REST API)
 
-```bash
-loginctl show-user <your-username> | grep Linger
-```
+⚠️ In non-container mode, `configure.py` renders from template files:
+
+- `rules.yaml.in`
+- `templates/rules/*.yaml.in`
+
+These are processed into actual runtime files. Docker mode does not use this template rendering pattern in the same way.
 
 ---
 
-## Manual mode (no systemd)
+# Operating Modes (non-container only)
 
-Start the DBus daemon (session bus):
+## Service Mode (recommended for non-container)
+
+Runs as systemd **user** services:
+
+- signal-cli DBus daemon
+- signal-cli-agent
+
+This is the preferred non-container approach.
+
+---
+
+## Manual Mode (no systemd)
+
+Start DBus daemon:
 
 ```bash
 signal-cli -a +15551234567 daemon --dbus
 ```
 
-Run the agent:
+Run agent:
 
 ```bash
 python3 signal-agent.py ./rules.yaml
@@ -119,7 +186,7 @@ python3 signal-agent.py ./rules.yaml
 
 ---
 
-## Test mode (no DBus, no Signal send)
+## Test Mode (no DBus, no Signal send)
 
 Simulate a message locally:
 
@@ -130,13 +197,37 @@ python3 signal-agent.py ./rules.yaml \
   --message "! disk?"
 ```
 
-Note: if you enable `globals.command_prefix`, your test message must include the prefix.
+Note:  
+If `globals.command_prefix` is enabled, your test message must include the prefix.
 
 ---
 
-## Maintenance
+# Boot-Time Startup (optional)
 
-### Uninstall services
+Systemd **user** services normally start only when you log in.
+
+To allow services to:
+
+- Start at boot
+- Continue running after logout
+
+Enable lingering:
+
+```bash
+sudo loginctl enable-linger <your-username>
+```
+
+Verify:
+
+```bash
+loginctl show-user <your-username> | grep Linger
+```
+
+---
+
+# Maintenance
+
+## Uninstall services
 
 ```bash
 make uninstall
@@ -144,12 +235,51 @@ make uninstall
 
 Removes installed systemd **user** units only.
 
-### Remove generated files
+---
+
+## Remove generated files
 
 ```bash
 make clean
 ```
 
-Removes generated configuration and rendered shipped templates only.
+Removes:
 
-Your custom rules in `rules.d/` remain untouched.
+- Rendered configuration files
+- Rendered systemd unit files
+- Shipped example templates (rendered)
+
+Your custom rules inside `rules.d/` remain untouched.
+
+---
+
+# Remove everything (full cleanup)
+
+To completely remove:
+
+1. Uninstall services:
+
+```bash
+make uninstall
+```
+
+2. Remove generated files:
+
+```bash
+make clean
+```
+
+3. Optionally remove `signal-cli` from the host if no longer needed.
+
+---
+
+# Summary
+
+Non-container mode requires:
+
+- Host-installed `signal-cli`
+- Host DBus session
+- Python dependencies
+- systemd user services (recommended)
+
+If you do not explicitly need this architecture, use the Docker deployment instead.
