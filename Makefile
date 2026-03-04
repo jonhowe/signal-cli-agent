@@ -35,14 +35,20 @@ help:
 	@echo "  test               - run agent in --test mode locally"
 	@echo ""
 	@echo "Docker Targets:"
-	@echo "  docker-build       - build container"
-	@echo "  docker-up          - bring up container"
+	@echo "  docker-pull        - pull the published image from GHCR"
+	@echo "  docker-build       - build container locally"
+	@echo "  docker-up          - bring up container (no forced build)"
+	@echo "  docker-up-pull     - pull then bring up container"
+	@echo "  docker-up-build    - force rebuild then bring up container"
 	@echo "  docker-down        - stop container"
 	@echo "  docker-logs        - tail raw container logs"
 	@echo "  docker-logs-filter - tail filtered logs (only actionable message blocks)"
-	@echo "  docker-configure   - generate ./config from templates (runs configure.py inside the container)"
-	@echo "  docker-link        - link device"
-	@echo "  docker-sync        - sync contacts/groups"
+	@echo "  docker-configure   - generate ./config from templates (runs configure.py inside the container; no forced build)"
+	@echo "  docker-configure-build - same as docker-configure but forces image rebuild"
+	@echo "  docker-link        - link device (no forced build)"
+	@echo "  docker-link-build  - link device (forces image rebuild)"
+	@echo "  docker-sync        - sync contacts/groups (no forced build)"
+	@echo "  docker-sync-build  - sync contacts/groups (forces image rebuild)"
 	@echo ""
 	@echo "Test overrides:"
 	@echo "  make test TEST_SENDER=+15551234567 TEST_MESSAGE='disk?'"
@@ -54,6 +60,7 @@ quickstart: install start
 .PHONY: configure
 configure:
 	python3 ./configure.py --mode systemd
+
 .PHONY: install
 install: configure
 	mkdir -p "$(USER_SYSTEMD_DIR)"
@@ -128,23 +135,24 @@ pytest:
 COMPOSE_FILE := docker/compose/docker-compose.yml
 DOCKER_RULES ?= ./config/rules.yaml
 
-.PHONY: docker-configure
+.PHONY: docker-pull docker-build docker-up docker-up-pull docker-up-build docker-down docker-logs docker-logs-filter
+.PHONY: docker-configure docker-configure-build docker-link docker-link-build docker-sync docker-sync-build
 
-docker-configure:
-	@if [ -z "$(PHONE)" ]; then \
-		echo "ERROR: set PHONE=+15551234567"; \
-		exit 2; \
-	fi
-	mkdir -p config data
-	docker compose -f $(COMPOSE_FILE) run --rm --build signal-agent python3 /app/configure.py --mode container --config-dir /config --phone "$(PHONE)"
-
-.PHONY: docker-build docker-up docker-down docker-logs docker-logs-filter docker-link docker-sync docker-configure
+docker-pull:
+	docker compose -f $(COMPOSE_FILE) pull
 
 docker-build:
 	docker compose -f $(COMPOSE_FILE) build
 
 docker-up:
-	docker compose -f $(COMPOSE_FILE) up --build -d
+	docker compose -f $(COMPOSE_FILE) up -d
+
+docker-up-pull:
+	docker compose -f $(COMPOSE_FILE) pull
+	docker compose -f $(COMPOSE_FILE) up -d
+
+docker-up-build:
+	docker compose -f $(COMPOSE_FILE) up -d --build
 
 docker-down:
 	docker compose -f $(COMPOSE_FILE) down
@@ -161,8 +169,30 @@ docker-logs-filter:
 		     buf!="" { buf=buf $$0 ORS; if ($$0 ~ /^[[:space:]]*Body:[[:space:]]*!/) keep=1; if ($$0=="") flush(); next } \
 		     END { flush() }'
 
+docker-configure:
+	@if [ -z "$(PHONE)" ]; then \
+		echo "ERROR: set PHONE=+15551234567"; \
+		exit 2; \
+	fi
+	mkdir -p config data
+	docker compose -f $(COMPOSE_FILE) run --rm signal-agent python3 /app/configure.py --mode container --config-dir /config --phone "$(PHONE)"
+
+docker-configure-build:
+	@if [ -z "$(PHONE)" ]; then \
+		echo "ERROR: set PHONE=+15551234567"; \
+		exit 2; \
+	fi
+	mkdir -p config data
+	docker compose -f $(COMPOSE_FILE) run --rm --build signal-agent python3 /app/configure.py --mode container --config-dir /config --phone "$(PHONE)"
+
 docker-link:
+	docker compose -f $(COMPOSE_FILE) run --rm signal-agent link
+
+docker-link-build:
 	docker compose -f $(COMPOSE_FILE) run --rm --build signal-agent link
 
 docker-sync:
+	docker compose -f $(COMPOSE_FILE) run --rm signal-agent sync
+
+docker-sync-build:
 	docker compose -f $(COMPOSE_FILE) run --rm --build signal-agent sync

@@ -21,6 +21,40 @@ It lets you securely trigger actions on a host using Signal as the control chann
 
 ---
 
+# Container Image (GHCR)
+
+A prebuilt container image is published to GitHub Container Registry (GHCR):
+
+- `ghcr.io/jonhowe/signal-cli-agent:latest`
+
+Pull it:
+
+```bash
+docker pull ghcr.io/jonhowe/signal-cli-agent:latest
+```
+
+## Use the registry image by default (recommended)
+
+The included compose setup can use the GHCR image by default. A typical flow:
+
+```bash
+make docker-pull
+make docker-up
+make docker-logs
+```
+
+## Build locally (optional)
+
+If you're developing and want to rebuild the image from your working tree:
+
+```bash
+make docker-up-build
+```
+
+Full guide: **[docs/DOCKER.md](docs/DOCKER.md)**
+
+---
+
 # Docker Setup (Recommended)
 
 This repo is **container-first**: it runs **signal-cli + signal-cli-agent inside one container** with an **internal session D-Bus**.
@@ -67,10 +101,18 @@ To link this container to an existing Signal account:
 make docker-sync
 ```
 
-### 4️⃣ Start the stack
+### 4️⃣ Pull + start the stack (recommended)
 
 ```bash
+make docker-pull
 make docker-up
+make docker-logs
+```
+
+### 5️⃣ (Optional) Build locally + start the stack
+
+```bash
+make docker-up-build
 make docker-logs
 ```
 
@@ -82,12 +124,18 @@ For users who prefer raw Docker commands, here is what the Makefile wraps:
 
 | Make Command | Equivalent Docker Command |
 |--------------|--------------------------|
-| `make docker-configure PHONE=+1XXX` | `docker compose -f docker/compose/docker-compose.yml run --rm --build signal-agent python3 /app/configure.py --mode container --config-dir /config --phone +1XXX` |
-| `make docker-link` | `docker compose -f docker/compose/docker-compose.yml run --rm --build signal-agent link` |
-| `make docker-sync` | `docker compose -f docker/compose/docker-compose.yml run --rm --build signal-agent sync` |
+| `make docker-pull` | `docker compose -f docker/compose/docker-compose.yml pull` |
+| `make docker-configure PHONE=+1XXX` | `docker compose -f docker/compose/docker-compose.yml run --rm signal-agent python3 /app/configure.py --mode container --config-dir /config --phone +1XXX` |
+| `make docker-configure-build PHONE=+1XXX` | `docker compose -f docker/compose/docker-compose.yml run --rm --build signal-agent python3 /app/configure.py --mode container --config-dir /config --phone +1XXX` |
+| `make docker-link` | `docker compose -f docker/compose/docker-compose.yml run --rm signal-agent link` |
+| `make docker-link-build` | `docker compose -f docker/compose/docker-compose.yml run --rm --build signal-agent link` |
+| `make docker-sync` | `docker compose -f docker/compose/docker-compose.yml run --rm signal-agent sync` |
+| `make docker-sync-build` | `docker compose -f docker/compose/docker-compose.yml run --rm --build signal-agent sync` |
 | `make docker-up` | `docker compose -f docker/compose/docker-compose.yml up -d` |
+| `make docker-up-pull` | `docker compose -f docker/compose/docker-compose.yml pull && docker compose -f docker/compose/docker-compose.yml up -d` |
+| `make docker-up-build` | `docker compose -f docker/compose/docker-compose.yml up -d --build` |
 | `make docker-down` | `docker compose -f docker/compose/docker-compose.yml down` |
-| `make docker-logs` | `docker logs -f signal-agent` |
+| `make docker-logs` | `docker compose -f docker/compose/docker-compose.yml logs -f --no-color signal-agent` |
 
 The Makefile exists purely for convenience — it does not add additional orchestration logic.
 

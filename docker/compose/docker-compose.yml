@@ -1,9 +1,9 @@
 services:
   signal-agent:
     build:
-      context: ../..
+      context: ..
       dockerfile: docker/Dockerfile
-    image: signal-cli-agent:local
+    image: ghcr.io/jonhowe/signal-cli-agent:latest
     container_name: signal-agent
     restart: unless-stopped
     network_mode: host
