@@ -13,7 +13,7 @@ It lets you securely trigger actions on a host using Signal as the control chann
 **External REST API (optional outbound sends):**  
 👉 **[docs/REST_API.md](docs/REST_API.md)**
 
-**Optional “less strict” prompts via LiteLLM (NLP routing):**  
+**Optional NLP routing (LiteLLM integration):**  
 👉 **[docs/NLP.md](docs/NLP.md)**
 
 **Non-container (systemd / bare-metal) operation:**  
@@ -89,7 +89,7 @@ For users who prefer raw Docker commands, here is what the Makefile wraps:
 | `make docker-down` | `docker compose -f docker/compose/docker-compose.yml down` |
 | `make docker-logs` | `docker logs -f signal-agent` |
 
-The Makefile exists purely for convenience — it does not add extra logic beyond wrapping Docker commands.
+The Makefile exists purely for convenience — it does not add additional orchestration logic.
 
 ---
 
@@ -155,59 +155,107 @@ The prefix is stripped **before** rule matching and **before** NLP routing.
 
 # Plugins
 
-In addition to `command`-based rules, the agent supports **plugin-style rules** for structured integrations.
+In addition to `command`-based rules, the agent supports structured plugin-style rules.
 
-See full documentation: **[docs/PLUGINS.md](docs/PLUGINS.md)**
-
-## Currently Shipped Plugins
-
-### HTTP Plugin
-
-Allows performing outbound HTTP requests (GET/POST/etc.) and returning structured responses.
-
-Typical use cases:
-- Query internal APIs
-- Check system status endpoints
-- Trigger webhooks
-- Fetch JSON and extract values
-
-Capabilities:
-- Custom headers
-- Query parameters
-- JSON parsing
-- Controlled output formatting
+Full documentation: **[docs/PLUGINS.md](docs/PLUGINS.md)**
 
 ---
 
-### Home Assistant Plugin
+## Core Command Rule (Built-in)
 
-Enables integration with a Home Assistant instance.
+The default rule type executes local shell commands.
+
+Capabilities:
+
+- Regex capture groups
+- Input substitution
+- Output formatting
+- Rate limiting
+- Sender restrictions
+
+⚠️ Because this executes local commands, restrict senders and validate inputs carefully.
+
+---
+
+## HTTP Plugin
+
+Performs outbound HTTP requests and returns structured responses.
 
 Typical use cases:
+
+- Query internal APIs
+- Trigger webhooks
+- Check system health endpoints
+- Fetch JSON and extract specific fields
+
+Features:
+
+- GET / POST / other methods
+- Custom headers
+- Query parameters
+- JSON parsing and filtering
+- Controlled response formatting
+
+---
+
+## Home Assistant Plugin
+
+Integrates with a Home Assistant instance via its REST API.
+
+Typical use cases:
+
 - Turn lights on/off
 - Toggle switches
 - Query entity state
 - Trigger automations
 
 Features:
-- Token-based authentication
+
+- Long-lived access token authentication
 - Direct service calls
 - Entity state inspection
+- Structured response formatting
 
 ---
 
-### Command Plugin (Core)
+## NLP Routing (LiteLLM Integration)
 
-The default rule type that executes local shell commands.
+The agent supports optional **NLP-based rule routing** using LiteLLM.
 
-Capabilities:
-- Regex capture groups
-- Input substitution
-- Controlled execution
-- Output formatting
-- Rate limiting support
+This allows more natural language input instead of strict command matching.
 
-⚠️ Because this executes local commands, restrict senders and validate inputs carefully.
+Example:
+
+Instead of:
+
+```
+! bedroom on
+```
+
+A user could say:
+
+```
+! can you turn on the bedroom lights?
+```
+
+How it works:
+
+1. Strict rule matching is attempted first.
+2. If no rule matches, and NLP is enabled:
+   - The message is sent to LiteLLM.
+   - The model selects from explicitly allowed rules.
+   - The selected rule is executed.
+3. The result is returned via Signal.
+
+Important safeguards:
+
+- NLP does not create new commands.
+- It can only select from rules you explicitly mark as NLP-eligible.
+- Command prefix gating still applies (recommended).
+
+Configuration and setup instructions:
+
+👉 **[docs/NLP.md](docs/NLP.md)**
 
 ---
 
