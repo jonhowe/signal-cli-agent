@@ -27,3 +27,6 @@ __pycache__/
 .vscode/
 .idea/
 .DS_Store
+
+
+data/signal-cli/* 
