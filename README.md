@@ -4,156 +4,184 @@ Signal CLI Agent is a **rule-driven automation engine** that connects to `signal
 
 It lets you securely trigger actions on a host using Signal as the control channel — without exposing SSH, a web server, or a public API.
 
-**Rule schema / config reference (authoritative):**  
-👉 **[docs/RULES.md](docs/RULES.md)**
+## Documentation
 
-**Plugin reference (authoritative):**  
-👉 **[docs/PLUGINS.md](docs/PLUGINS.md)**
-
-**External REST API (optional outbound sends):**  
-👉 **[docs/REST_API.md](docs/REST_API.md)**
-
-**Optional NLP routing (LiteLLM integration):**  
-👉 **[docs/NLP.md](docs/NLP.md)**
-
-**Non-container (systemd / bare-metal) operation:**  
-👉 **[docs/NON_CONTAINER.md](docs/NON_CONTAINER.md)**
+- **Rules / configuration (authoritative):** 👉 **[docs/RULES.md](docs/RULES.md)**
+- **Plugins (authoritative):** 👉 **[docs/PLUGINS.md](docs/PLUGINS.md)**
+- **Docker details / troubleshooting:** 👉 **[docs/DOCKER.md](docs/DOCKER.md)**
+- **External REST API (optional outbound sends):** 👉 **[docs/REST_API.md](docs/REST_API.md)**
+- **Optional NLP routing (LiteLLM integration):** 👉 **[docs/NLP.md](docs/NLP.md)**
+- **Non-container operation (systemd / bare-metal):** 👉 **[docs/NON_CONTAINER.md](docs/NON_CONTAINER.md)**
+- **Development / building locally:** 👉 **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)**
 
 ---
 
-# Container Image (GHCR)
+## Container Image
 
 A prebuilt container image is published to GitHub Container Registry (GHCR):
 
 - `ghcr.io/jonhowe/signal-cli-agent:latest`
 
-Pull it:
+---
 
-```bash
-docker pull ghcr.io/jonhowe/signal-cli-agent:latest
-```
+# Quick Start (Docker Compose + GHCR Image)
 
-## Use the registry image by default (recommended)
+This is the recommended “fresh machine” flow:
 
-The included compose setup can use the GHCR image by default. A typical flow:
+1) create a small working directory  
+2) pull the image  
+3) **configure → link → sync → start**
 
-```bash
-make docker-pull
-make docker-up
-make docker-logs
-```
+### Prerequisites
 
-## Build locally (optional)
-
-If you're developing and want to rebuild the image from your working tree:
-
-```bash
-make docker-up-build
-```
-
-Full guide: **[docs/DOCKER.md](docs/DOCKER.md)**
+- Docker + Docker Compose v2 (`docker compose ...`)
+- Linux is recommended (this compose uses `network_mode: host`). For Docker Desktop (Mac/Windows), see **[docs/DOCKER.md](docs/DOCKER.md)**.
 
 ---
 
-# Docker Setup (Recommended)
+## 1) Create a working directory
 
-This repo is **container-first**: it runs **signal-cli + signal-cli-agent inside one container** with an **internal session D-Bus**.
+Pick a folder anywhere you like:
 
-The primary provisioning flow is **manual device linking** (scan an ASCII QR code printed in the terminal).
-
-Full guide: **[docs/DOCKER.md](docs/DOCKER.md)**
+```bash
+mkdir -p signal-cli-agent/{config,data}
+cd signal-cli-agent
+```
 
 ---
 
-# Quick Start (Using Makefile — Recommended)
+## 2) Create `docker-compose.yml`
 
-From the repo root:
+Create a file named `docker-compose.yml` in this folder:
 
-```bash
-mkdir -p config data
+```yaml
+services:
+  signal-agent:
+    image: ghcr.io/jonhowe/signal-cli-agent:latest
+    container_name: signal-agent
+    restart: unless-stopped
+
+    # Uses the host network (recommended on Linux).
+    network_mode: host
+
+    environment:
+      - XDG_CONFIG_HOME=/config
+      - XDG_DATA_HOME=/data
+      - SIGNAL_CLI_CONFIG=/data/signal-cli
+      # If you run signal-cli in multi-account mode, you may need:
+      # - SIGNAL_ACCOUNT=+1XXXXXXXXXX
+
+    volumes:
+      - ./config:/config
+      - ./data:/data
 ```
 
-### 1️⃣ Generate configuration
+---
+
+## 3) Pull the image
 
 ```bash
-make docker-configure PHONE=+1XXXXXXXXXX
+docker compose pull
 ```
 
-### 2️⃣ Link device (scan QR code)
+---
+
+## 4) Generate config (`./config`)
+
+This renders `rules.yaml` and rule templates into `./config/`.
 
 ```bash
-make docker-link
+PHONE="+1XXXXXXXXXX"
+docker compose run --rm signal-agent \
+  python3 /app/configure.py --mode container --config-dir /config --phone "$PHONE"
 ```
 
-When you run the link command, an ASCII QR code will be printed in your terminal.
+After this step, you should see:
 
-To link this container to an existing Signal account:
+- `./config/rules.yaml`
+- `./config/rules.d/…`
+
+---
+
+## 5) Link the Signal device (scan QR)
+
+This prints an ASCII QR code in your terminal:
+
+```bash
+docker compose run --rm signal-agent link
+```
+
+To link:
 
 1. Open **Signal** on your primary mobile device.
 2. Go to **Settings → Linked Devices**.
 3. Tap **Link New Device**.
 4. Scan the QR code displayed in the terminal.
-5. Wait for confirmation that the device has been successfully linked.
+5. Wait for confirmation.
 
-### 3️⃣ (Recommended) Sync once
+**Important:** the linked-device state is persisted under `./data/signal-cli`. Keep that directory if you don’t want to re-link.
 
-```bash
-make docker-sync
-```
+---
 
-### 4️⃣ Pull + start the stack (recommended)
+## 6) (Recommended) Sync once
 
 ```bash
-make docker-pull
-make docker-up
-make docker-logs
-```
-
-### 5️⃣ (Optional) Build locally + start the stack
-
-```bash
-make docker-up-build
-make docker-logs
+docker compose run --rm signal-agent sync
 ```
 
 ---
 
-# What the Make Commands Actually Do
+## 7) Start the long-running service
 
-For users who prefer raw Docker commands, here is what the Makefile wraps:
-
-| Make Command | Equivalent Docker Command |
-|--------------|--------------------------|
-| `make docker-pull` | `docker compose -f docker/compose/docker-compose.yml pull` |
-| `make docker-configure PHONE=+1XXX` | `docker compose -f docker/compose/docker-compose.yml run --rm signal-agent python3 /app/configure.py --mode container --config-dir /config --phone +1XXX` |
-| `make docker-configure-build PHONE=+1XXX` | `docker compose -f docker/compose/docker-compose.yml run --rm --build signal-agent python3 /app/configure.py --mode container --config-dir /config --phone +1XXX` |
-| `make docker-link` | `docker compose -f docker/compose/docker-compose.yml run --rm signal-agent link` |
-| `make docker-link-build` | `docker compose -f docker/compose/docker-compose.yml run --rm --build signal-agent link` |
-| `make docker-sync` | `docker compose -f docker/compose/docker-compose.yml run --rm signal-agent sync` |
-| `make docker-sync-build` | `docker compose -f docker/compose/docker-compose.yml run --rm --build signal-agent sync` |
-| `make docker-up` | `docker compose -f docker/compose/docker-compose.yml up -d` |
-| `make docker-up-pull` | `docker compose -f docker/compose/docker-compose.yml pull && docker compose -f docker/compose/docker-compose.yml up -d` |
-| `make docker-up-build` | `docker compose -f docker/compose/docker-compose.yml up -d --build` |
-| `make docker-down` | `docker compose -f docker/compose/docker-compose.yml down` |
-| `make docker-logs` | `docker compose -f docker/compose/docker-compose.yml logs -f --no-color signal-agent` |
-
-The Makefile exists purely for convenience — it does not add additional orchestration logic.
+```bash
+docker compose up -d
+```
 
 ---
 
-# Configuration Layout
+## 8) Tail logs
 
-In Docker mode, the container expects:
+```bash
+docker compose logs -f --no-color signal-agent
+```
 
-- `./config/rules.yaml` → mounted to `/config/rules.yaml`
-- `./config/rules.d/*.yaml` → mounted to `/config/rules.d/*.yaml`
-- `./data/signal-cli` → mounted to `/data/signal-cli` (Signal device state)
+Stop everything:
 
-The agent hot-reloads rules when files change.
+```bash
+docker compose down
+```
+
+Upgrade to the latest image later:
+
+```bash
+docker compose pull
+docker compose up -d
+```
 
 ---
 
-# Architecture (High Level)
+# Directory Layout
+
+When running in Docker mode, you’ll typically have:
+
+- `./docker-compose.yml`  
+  Your compose definition (uses the published GHCR image).
+
+- `./config/` → mounted to `/config`  
+  User configuration and secrets:
+  - `rules.yaml`
+  - `rules.d/*.yaml`
+  - token files (if you enable plugins like Home Assistant / REST API / NLP)
+
+- `./data/` → mounted to `/data`  
+  Persistent runtime state:
+  - `signal-cli` linked device state (keep this directory to avoid re-linking)
+
+**Note:** Application code (`signal-agent.py`, `plugins/`, `scripts/`) lives inside the container image under `/app`. You do not need to copy those into `./config`.
+
+---
+
+# Architecture
 
 ```mermaid
 flowchart TD
@@ -180,7 +208,7 @@ flowchart TD
 
 # Command Prefix Gate
 
-To prevent accidental triggers (especially with NLP enabled), you can require a prefix on **all commands**.
+To prevent accidental triggers (especially if NLP routing is enabled), you can require a prefix on **all commands**.
 
 Set this in `config/rules.yaml` under `globals`:
 
@@ -203,107 +231,9 @@ The prefix is stripped **before** rule matching and **before** NLP routing.
 
 # Plugins
 
-In addition to `command`-based rules, the agent supports structured plugin-style rules.
+In addition to `command`-based rules, the agent supports structured plugin rules (e.g., HTTP, Home Assistant, REST API, NLP routing).
 
 Full documentation: **[docs/PLUGINS.md](docs/PLUGINS.md)**
-
----
-
-## Core Command Rule (Built-in)
-
-The default rule type executes local shell commands.
-
-Capabilities:
-
-- Regex capture groups
-- Input substitution
-- Output formatting
-- Rate limiting
-- Sender restrictions
-
-⚠️ Because this executes local commands, restrict senders and validate inputs carefully.
-
----
-
-## HTTP Plugin
-
-Performs outbound HTTP requests and returns structured responses.
-
-Typical use cases:
-
-- Query internal APIs
-- Trigger webhooks
-- Check system health endpoints
-- Fetch JSON and extract specific fields
-
-Features:
-
-- GET / POST / other methods
-- Custom headers
-- Query parameters
-- JSON parsing and filtering
-- Controlled response formatting
-
----
-
-## Home Assistant Plugin
-
-Integrates with a Home Assistant instance via its REST API.
-
-Typical use cases:
-
-- Turn lights on/off
-- Toggle switches
-- Query entity state
-- Trigger automations
-
-Features:
-
-- Long-lived access token authentication
-- Direct service calls
-- Entity state inspection
-- Structured response formatting
-
----
-
-## NLP Routing (LiteLLM Integration)
-
-The agent supports optional **NLP-based rule routing** using LiteLLM.
-
-This allows more natural language input instead of strict command matching.
-
-Example:
-
-Instead of:
-
-```
-! bedroom on
-```
-
-A user could say:
-
-```
-! can you turn on the bedroom lights?
-```
-
-How it works:
-
-1. Strict rule matching is attempted first.
-2. If no rule matches, and NLP is enabled:
-   - The message is sent to LiteLLM.
-   - The model selects from explicitly allowed rules.
-   - The selected rule is executed.
-3. The result is returned via Signal.
-
-Important safeguards:
-
-- NLP does not create new commands.
-- It can only select from rules you explicitly mark as NLP-eligible.
-- Command prefix gating still applies (recommended).
-
-Configuration and setup instructions:
-
-👉 **[docs/NLP.md](docs/NLP.md)**
 
 ---
 
@@ -315,8 +245,8 @@ This system executes local actions triggered by Signal messages. You should:
 - Prefer strict matching (`exact`) when possible
 - Validate inputs carefully (especially regex capture groups)
 - Use rate limiting
-- Avoid committing secrets
-- Run as a non-root user where feasible
+- Avoid committing secrets (tokens, keys) into Git
+- Run as a non-root user where feasible (depending on deployment)
 
 For detailed configuration, safety guidance, and safe vs unsafe examples:
 
