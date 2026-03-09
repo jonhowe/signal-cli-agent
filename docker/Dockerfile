@@ -64,11 +64,22 @@ RUN if [ -f /app/requirements.txt ]; then \
       pip3 install --no-cache-dir -r /app/requirements.txt; \
     fi
 
+# Create non-root user for security
+RUN groupadd --gid 1000 appuser && \
+    useradd --uid 1000 --gid appuser --shell /bin/bash --create-home appuser
+
 # Copy entrypoint to a stable absolute path expected by compose/run flows
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+# Create directories with proper ownership
+RUN mkdir -p /config /data && \
+    chown -R appuser:appuser /config /data /app
+
 EXPOSE 8787
+
+# Switch to non-root user
+USER appuser
 
 # tini as PID1; exec entrypoint at a fixed location
 ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
