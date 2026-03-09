@@ -1,0 +1,204 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "signal-cli-agent"
+version = "1.0.0"
+description = "Rule-driven automation engine that connects to signal-cli via DBus for secure remote command execution"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [
+    {name = "Signal CLI Agent Contributors"},
+]
+keywords = ["signal", "automation", "dbus", "messaging", "security"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: Chat",
+    "Topic :: Home Automation",
+    "Topic :: Security",
+    "Topic :: System :: Monitoring",
+    "Topic :: System :: Systems Administration",
+]
+
+# Core runtime dependencies
+dependencies = [
+    "PyYAML>=6.0",
+    "pydbus>=0.6.0",
+    "PyGObject>=3.40.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/jhowe/signal-cli-agent"
+Documentation = "https://github.com/jhowe/signal-cli-agent/tree/main/docs"
+Repository = "https://github.com/jhowe/signal-cli-agent"
+Issues = "https://github.com/jhowe/signal-cli-agent/issues"
+
+[project.scripts]
+signal-agent = "signal-agent:main"
+
+[project.optional-dependencies]
+# Development dependencies
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "bandit[toml]>=1.7.0",
+    "mypy>=1.0.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "coverage>=7.0.0",
+]
+
+# Security analysis tools
+security = [
+    "bandit[toml]>=1.7.0",
+    "safety>=2.3.0",
+    "semgrep>=1.0.0",
+]
+
+# Documentation building
+docs = [
+    "mkdocs>=1.4.0",
+    "mkdocs-material>=9.0.0",
+    "mkdocs-mermaid2-plugin>=1.0.0",
+]
+
+# All optional dependencies combined
+all = [
+    "signal-cli-agent[dev,security,docs]",
+]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/.github",
+    "/.git",
+    "/config",
+    "/data",
+    "/rules.yaml",
+    "/systemd",
+    "/rules.d",
+    "/.signal_agent_generated.json",
+    "/.generated-manifest.json",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["plugins", "scripts"]
+
+# Pytest configuration
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--verbose",
+    "--tb=short",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "security: marks tests as security-focused tests",
+]
+
+# Coverage configuration
+[tool.coverage.run]
+source = [".", "plugins"]
+omit = [
+    "tests/*",
+    "scripts/*",
+    "*/site-packages/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+# Black code formatting
+[tool.black]
+line-length = 120
+target-version = ['py39']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+# isort import sorting
+[tool.isort]
+profile = "black"
+line_length = 120
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+
+# Mypy type checking
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = ["pydbus.*", "gi.*"]
+ignore_missing_imports = true
+
+# Bandit security analysis
+[tool.bandit]
+exclude_dirs = ["tests", "scripts"]
+skips = ["B101"]  # Skip assert_used test
+
+[tool.bandit.assert_used]
+skips = ["*_test.py", "*/test_*.py"]
+
+# Flake8 configuration (extends pyproject.toml support via flake8-pyproject)
+[tool.flake8]
+max-line-length = 120
+extend-ignore = [
+    "E203",  # whitespace before ':' (conflicts with black)
+    "W503",  # line break before binary operator (conflicts with black)
+]
+exclude = [
+    ".git",
+    "__pycache__",
+    ".venv",
+    "build",
+    "dist",
+]

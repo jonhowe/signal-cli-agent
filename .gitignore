@@ -225,3 +225,13 @@ rest_api_token
 # Docker runtime
 config/
 data/
+
+# Modern Python packaging artifacts
+.pdm-python
+.pdm-build/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/

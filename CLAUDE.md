@@ -10,6 +10,9 @@ Signal CLI Agent is a rule-driven automation engine that connects to `signal-cli
 
 ### Local Development (systemd mode)
 ```bash
+# Development environment setup
+pip install -e .[dev]   # Install in development mode with all dependencies
+
 # Quick setup: configure + install + start
 make quickstart
 
@@ -126,12 +129,19 @@ make docker-sync-build                       # Sync with rebuild
 - `scripts/` - Utility scripts
 - `templates/` - Template files for configuration generation
 - `docker/` - Container build files
+- `pyproject.toml` - Python project configuration and dependencies
+- `requirements*.txt` - Legacy/simple dependency files
 
 **Runtime Configuration** (mounted when running)
 - `./config/rules.yaml` - Main rule configuration
 - `./config/rules.d/` - Additional rule files
 - `./config/tokens/` - API tokens and secrets
 - `./data/signal-cli/` - Signal linked device state (preserve to avoid re-linking)
+
+**Development Files**
+- `tests/` - Test suite
+- `docs/` - Documentation (including DEPENDENCIES.md)
+- `CLAUDE.md` - This file (development guide)
 
 ## Security Considerations
 

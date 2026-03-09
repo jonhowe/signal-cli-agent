@@ -1,0 +1,20 @@
+# Signal CLI Agent - Development Dependencies
+#
+# Install with: pip install -r requirements-dev.txt
+# Or use: pip install -e .[dev]
+#
+# Include core dependencies
+-r requirements.txt
+
+# Development and testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+coverage>=7.0.0
+
+# Code quality and security
+bandit[toml]>=1.7.0
+mypy>=1.0.0
+black>=23.0.0
+isort>=5.12.0
+flake8>=6.0.0
+safety>=2.3.0

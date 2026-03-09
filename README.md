@@ -14,6 +14,7 @@ It lets you securely trigger actions on a host using Signal as the control chann
 - **Optional NLP routing (LiteLLM integration):** 👉 **[docs/NLP.md](docs/NLP.md)**
 - **Non-container operation (systemd / bare-metal):** 👉 **[docs/NON_CONTAINER.md](docs/NON_CONTAINER.md)**
 - **Development / building locally:** 👉 **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)**
+- **Dependencies and setup:** 👉 **[docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)**
 
 ---
 

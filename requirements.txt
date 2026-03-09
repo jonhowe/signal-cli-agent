@@ -1,0 +1,9 @@
+# Signal CLI Agent - Core Dependencies
+#
+# This file provides backward compatibility and simpler pip-based installs.
+# For full dependency management, use: pip install -e .
+#
+# Core runtime dependencies
+PyYAML>=6.0
+pydbus>=0.6.0
+PyGObject>=3.40.0

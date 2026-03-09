@@ -50,10 +50,16 @@ RUN set -eux; \
 
 WORKDIR /app
 
-# Copy repository (requirements.txt optional)
+# Copy repository
 COPY . /app
 
-# Optional Python deps (do NOT fail build if requirements.txt is absent)
+# Install Python dependencies from pyproject.toml
+# Note: Still keep system packages for GLib/DBus integration
+RUN if [ -f /app/pyproject.toml ]; then \
+      pip3 install --no-cache-dir /app/; \
+    fi
+
+# Legacy support: Optional requirements.txt (do NOT fail build if absent)
 RUN if [ -f /app/requirements.txt ]; then \
       pip3 install --no-cache-dir -r /app/requirements.txt; \
     fi
