@@ -14,7 +14,7 @@ ARG SIGNAL_CLI_VERSION=0.14.0
 # - tini: PID 1 + signal handling
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl jq \
-    python3 python3-pip python3-yaml python3-gi gir1.2-glib-2.0 python3-pydbus \
+    python3 python3-pip python3-yaml python3-gi python3-cairo gir1.2-glib-2.0 python3-pydbus \
     dbus dbus-user-session \
     openjdk-17-jre-headless \
     qrencode \
