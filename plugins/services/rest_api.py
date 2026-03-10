@@ -396,13 +396,13 @@ class RestApiService(BaseServicePlugin):
         ok, msg = check_private_file(tok_path)
         if not ok and require_private:
             # Fail closed.
-            log.error("REST API token file permissions error: %s", msg)
+            log.error("REST API auth file permissions error: %s", msg)
             return False
         if not ok and not require_private:
             key = os.path.expanduser(tok_path)
             if key not in self._warned_token_files:
                 self._warned_token_files.add(key)
-                log.warning("REST API token file permissions warning: %s", msg)
+                log.warning("REST API auth file permissions issue: %s", msg)
 
         expected = self._token_cache.read()
         return hmac.compare_digest(expected, presented)

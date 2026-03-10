@@ -23,6 +23,10 @@ def _read_token_file(path: str) -> str:
 
 
 def _post_json(url: str, headers: Dict[str, str], body: Dict[str, Any], timeout_sec: int) -> Dict[str, Any]:
+    # Security validation: ensure URL uses safe schemes only
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise ValueError(f"URL must use http or https scheme, got: {url[:50]}")
+
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         url=url,
@@ -31,7 +35,8 @@ def _post_json(url: str, headers: Dict[str, str], body: Dict[str, Any], timeout_
         headers={**headers, "Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+        # URL is validated above to ensure only http/https schemes are allowed
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
             raw = resp.read().decode("utf-8", errors="replace")
             return json.loads(raw)
     except urllib.error.HTTPError as e:
@@ -179,6 +184,10 @@ def route_message(
     base_url = str(cfg.get("base_url", "")).strip().rstrip("/")
     if not base_url:
         raise ValueError("globals.nlp.base_url is required (e.g. http://127.0.0.1:4001/v1)")
+
+    # Validate URL scheme for security (prevent file:// and other dangerous schemes)
+    if not (base_url.startswith("http://") or base_url.startswith("https://")):
+        raise ValueError("globals.nlp.base_url must use http:// or https:// scheme")
 
     model = str(cfg.get("model", "")).strip()
     if not model:

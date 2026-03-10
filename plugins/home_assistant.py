@@ -121,7 +121,7 @@ class HomeAssistantPlugin(BasePlugin):
             key = os.path.expanduser(token_file)
             if key not in _WARNED_TOKEN_FILES:
                 _WARNED_TOKEN_FILES.add(key)
-                log.warning("Home Assistant token file permissions warning: %s", msg)
+                log.warning("Home Assistant auth file permissions issue: %s", msg)
 
         if action == "get_state":
             entity_id = str(cfg.get("entity_id", "")).strip()
