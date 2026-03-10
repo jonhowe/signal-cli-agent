@@ -43,9 +43,6 @@ Documentation = "https://github.com/jhowe/signal-cli-agent/tree/main/docs"
 Repository = "https://github.com/jhowe/signal-cli-agent"
 Issues = "https://github.com/jhowe/signal-cli-agent/issues"
 
-[project.scripts]
-signal-agent = "signal-agent:main"
-
 [project.optional-dependencies]
 # Development dependencies
 dev = [

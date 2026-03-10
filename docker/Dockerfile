@@ -14,7 +14,7 @@ ARG SIGNAL_CLI_VERSION=0.14.0
 # - tini: PID 1 + signal handling
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl jq \
-    python3 python3-pip python3-yaml python3-gi gir1.2-glib-2.0 python3-pydbus \
+    python3 python3-pip python3-yaml python3-gi python3-cairo gir1.2-glib-2.0 python3-pydbus \
     dbus dbus-user-session \
     openjdk-17-jre-headless \
     qrencode \
@@ -54,14 +54,17 @@ WORKDIR /app
 COPY . /app
 
 # Install Python dependencies from pyproject.toml
-# Note: Still keep system packages for GLib/DBus integration
+# --break-system-packages is required on Debian Bookworm (Python 3.11+, PEP 668)
+# which marks the system Python as externally-managed. This is intentional in a
+# container where we own the environment.
+# Note: Still keep system packages for GLib/DBus integration (python3-pydbus etc.)
 RUN if [ -f /app/pyproject.toml ]; then \
-      pip3 install --no-cache-dir /app/; \
+      pip3 install --no-cache-dir --break-system-packages /app/; \
     fi
 
 # Legacy support: Optional requirements.txt (do NOT fail build if absent)
 RUN if [ -f /app/requirements.txt ]; then \
-      pip3 install --no-cache-dir -r /app/requirements.txt; \
+      pip3 install --no-cache-dir --break-system-packages -r /app/requirements.txt; \
     fi
 
 # Create non-root user for security
