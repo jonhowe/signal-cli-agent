@@ -34,7 +34,7 @@ jobs:
       - name: Run unit tests
         run: |
           docker run --rm signal-cli-agent:ci-test \
-            python3 -m pytest /app/tests -q --tb=short
+            bash -c "pip3 install --no-cache-dir --break-system-packages pytest -q && python3 -m pytest /app/tests -q --tb=short"
 
       - name: Smoke test — privilege drop
         run: |
