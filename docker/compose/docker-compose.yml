@@ -6,6 +6,7 @@ services:
     image: ghcr.io/jonhowe/signal-cli-agent:latest
     container_name: signal-agent
     restart: unless-stopped
+    user: "0"
     network_mode: host
     environment:
       - XDG_CONFIG_HOME=/config
