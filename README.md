@@ -1,5 +1,8 @@
 # Signal CLI Agent
 
+[![Build](https://github.com/jonhowe/signal-cli-agent/actions/workflows/docker-build-check.yml/badge.svg)](https://github.com/jonhowe/signal-cli-agent/actions/workflows/docker-build-check.yml)
+[![Release](https://github.com/jonhowe/signal-cli-agent/actions/workflows/publish-ghcr.yml/badge.svg)](https://github.com/jonhowe/signal-cli-agent/actions/workflows/publish-ghcr.yml)
+
 Signal CLI Agent is a **rule-driven automation engine** that connects to `signal-cli` via DBus and executes **local actions** in response to **trusted** Signal messages.
 
 It lets you securely trigger actions on a host using Signal as the control channel — without exposing SSH, a web server, or a public API.
