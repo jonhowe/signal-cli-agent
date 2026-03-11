@@ -15,6 +15,7 @@ ARG SIGNAL_CLI_VERSION=0.14.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl jq \
     python3 python3-pip python3-yaml python3-gi python3-cairo gir1.2-glib-2.0 python3-pydbus \
+    gosu \
     dbus dbus-user-session \
     openjdk-17-jre-headless \
     qrencode \
@@ -81,7 +82,8 @@ RUN mkdir -p /config /data && \
 
 EXPOSE 8787
 
-# Switch to non-root user
+# Switch to non-root user (entrypoint will run as root briefly to fix volume
+# ownership on bind mounts, then drop back to this user via gosu)
 USER appuser
 
 # tini as PID1; exec entrypoint at a fixed location

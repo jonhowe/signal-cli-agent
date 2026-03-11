@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# If started as root (e.g. via compose user: "0"), fix bind-mount ownership
+# then re-exec as the unprivileged appuser. This handles the common case where
+# existing host data was created by an older root-running container.
+if [ "$(id -u)" = "0" ]; then
+  mkdir -p "${XDG_CONFIG_HOME:-/config}" "${XDG_DATA_HOME:-/data}"
+  chown -R appuser:appuser "${XDG_CONFIG_HOME:-/config}" "${XDG_DATA_HOME:-/data}"
+  exec gosu appuser "$0" "$@"
+fi
+
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-/config}"
 export XDG_DATA_HOME="${XDG_DATA_HOME:-/data}"
 SIGNAL_CLI_CONFIG="${SIGNAL_CLI_CONFIG:-/data/signal-cli}"
