@@ -11,7 +11,7 @@ on:
     types: [published]
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -70,3 +70,23 @@ jobs:
           file: docker/Dockerfile
           push: true
           tags: ${{ steps.vars.outputs.tags }}
+
+      - name: Add Docker image link to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+          IMAGE: ${{ steps.vars.outputs.image }}
+          REPO: ${{ github.repository }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          EXISTING=$(gh release view "$TAG" --json body -q .body)
+          # Skip if Docker section already present (idempotent re-runs)
+          if echo "$EXISTING" | grep -q "ghcr.io"; then
+            echo "Docker link already present, skipping."
+            exit 0
+          fi
+          printf '%s\n\n---\n\n**Docker Image**\n```\ndocker pull %s:%s\n```\n\n[View package on GHCR](https://github.com/%s/pkgs/container/%s)\n' \
+            "$EXISTING" "$IMAGE" "$TAG" "$REPO" "$REPO_NAME" \
+            > /tmp/release-notes.md
+          gh release edit "$TAG" --notes-file /tmp/release-notes.md
