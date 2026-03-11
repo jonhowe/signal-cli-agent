@@ -47,6 +47,26 @@ From the repo root:
 mkdir -p config data
 ```
 
+The default compose file is [docker-compose.yml](/home/jhowe/git/signal-cli-agent/docker-compose.yml) in the repo root, so you can use plain `docker compose ...` commands without `-f`.
+
+### Optional: local overrides
+
+If you need machine-specific changes, create `docker-compose.override.yml` in the repo root. Docker Compose merges it automatically with the base file.
+
+Start from the example:
+
+```bash
+cp docker-compose.override.yml.example docker-compose.override.yml
+```
+
+The example file is fully commented so it is safe to copy first and customize after that.
+
+Use overrides for things like:
+
+- setting `SIGNAL_ACCOUNT`
+- pinning a specific image tag
+- changing runtime options locally without editing the tracked base compose file
+
 ### Generate initial config
 
 The container reads configuration from `/config`, which is a bind mount of `./config`.
@@ -61,7 +81,8 @@ You need at least:
 This avoids needing Python on the host:
 
 ```bash
-docker compose -f docker/compose/docker-compose.yml run --rm --build signal-agent   python3 /app/configure.py --mode container --config-dir /config --phone +1XXXXXXXXXX
+docker compose run --rm signal-agent \
+  python3 /app/configure.py --mode container --config-dir /config --phone +1XXXXXXXXXX
 ```
 
 #### Option B: run `configure.py` on the host
@@ -73,7 +94,7 @@ python3 ./configure.py --mode container --config-dir ./config --phone +1XXXXXXXX
 ### Build the image
 
 ```bash
-docker compose -f docker/compose/docker-compose.yml build
+docker compose build
 ```
 
 ---
@@ -85,7 +106,7 @@ docker compose -f docker/compose/docker-compose.yml build
 1) Generate an ASCII QR code in your terminal:
 
 ```bash
-docker compose -f docker/compose/docker-compose.yml run --rm --build signal-agent link
+docker compose run --rm signal-agent link
 ```
 
 2) On your phone:
@@ -95,13 +116,13 @@ docker compose -f docker/compose/docker-compose.yml run --rm --build signal-agen
 3) (Recommended) Do a one-time sync to pull down groups/contacts after linking:
 
 ```bash
-docker compose -f docker/compose/docker-compose.yml run --rm --build signal-agent sync
+docker compose run --rm signal-agent sync
 ```
 
 4) Start the stack:
 
 ```bash
-docker compose -f docker/compose/docker-compose.yml up -d
+docker compose up -d
 docker logs -f signal-agent
 ```
 
@@ -151,7 +172,7 @@ curl -sS http://127.0.0.1:8787/health
 Run the provisioning step:
 
 ```bash
-docker compose -f docker/compose/docker-compose.yml run --rm --build signal-agent link
+docker compose run --rm signal-agent link
 ```
 
 ### Check what’s listening

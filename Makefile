@@ -132,7 +132,7 @@ pytest:
 # ----------------------------
 # Docker (Option A: internal DBus)
 # ----------------------------
-COMPOSE_FILE := docker/compose/docker-compose.yml
+COMPOSE_FILE := docker-compose.yml
 DOCKER_RULES ?= ./config/rules.yaml
 
 .PHONY: docker-pull docker-build docker-up docker-up-pull docker-up-build docker-down docker-logs docker-logs-filter

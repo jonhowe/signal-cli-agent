@@ -33,9 +33,10 @@ A prebuilt container image is published to GitHub Container Registry (GHCR):
 
 This is the recommended flow:
 
-1) create a small working directory  
-2) pull the image  
-3) **configure → link → sync → start**
+1) clone the repo  
+2) create `config/` and `data/`  
+3) optionally add `docker-compose.override.yml`  
+4) **pull/configure → link → sync → start**
 
 ### Prerequisites
 
@@ -44,40 +45,39 @@ This is the recommended flow:
 
 ---
 
-## 1) Create a working directory
+## 1) Clone the repo and create runtime directories
 
-Pick a folder anywhere you like:
+From the repo root:
 
 ```bash
-mkdir -p signal-cli-agent/{config,data}
+git clone https://github.com/jonhowe/signal-cli-agent.git
 cd signal-cli-agent
+mkdir -p config data
 ```
 
 ---
 
-## 2) Create `docker-compose.yml`
+## 2) Use the included `docker-compose.yml`
 
-Create a file named `docker-compose.yml` in this folder:
+The repo now ships a ready-to-use [docker-compose.yml](/home/jhowe/git/signal-cli-agent/docker-compose.yml) in the root. It points at the published GHCR image and also includes a local `build:` definition for development workflows.
 
-```yaml
-services:
-  signal-agent:
-    image: ghcr.io/jonhowe/signal-cli-agent:latest
-    container_name: signal-agent
-    restart: unless-stopped
+If you want local-only changes, create `docker-compose.override.yml` next to it. Docker Compose loads that file automatically.
 
-    # Uses the host network (recommended on Linux).
-    network_mode: host
+Start from the provided example:
 
-    environment:
-      - XDG_CONFIG_HOME=/config
-      - XDG_DATA_HOME=/data
-      - SIGNAL_CLI_CONFIG=/data/signal-cli
-
-    volumes:
-      - ./config:/config
-      - ./data:/data
+```bash
+cp docker-compose.override.yml.example docker-compose.override.yml
 ```
+
+The example file is fully commented. Uncomment only the settings you want to change locally.
+
+Common override uses:
+
+- set `SIGNAL_ACCOUNT` for multi-account DBus mode
+- pin to a specific image tag instead of `:latest`
+- switch to local rebuilds while developing
+
+See **[docs/DOCKER.md](docs/DOCKER.md)** for an override example.
 
 ---
 
@@ -170,7 +170,10 @@ docker compose up -d
 When running in Docker mode, you’ll typically have:
 
 - `./docker-compose.yml`  
-  Your compose definition (uses the published GHCR image).
+  The repo-provided compose definition. `docker compose` reads this automatically.
+
+- `./docker-compose.override.yml`  
+  Optional local-only overrides. This file is auto-loaded if present and is gitignored.
 
 - `./config/` → mounted to `/config`  
   User configuration and secrets:

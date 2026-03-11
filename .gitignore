@@ -218,6 +218,7 @@ rules.d/example-rules.yaml
 .generated-manifest.json
 rules.d/Location.yaml
 rules.d/calendar.yaml
+docker-compose.override.yml
 user-generated/*
 rules.d/bedroom_on.yaml
 litellm_token

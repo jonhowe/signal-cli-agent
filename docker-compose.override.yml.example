@@ -1,0 +1,15 @@
+services:
+  signal-agent:
+    # Uncomment the settings you want to override locally.
+
+    # Example: pin to a specific published image tag instead of :latest
+    # image: ghcr.io/jonhowe/signal-cli-agent:v0.1.0
+
+    # Example: rebuild from local source while developing
+    # build:
+    #   context: .
+    #   dockerfile: docker/Dockerfile
+
+    # Example: wait for a specific multi-account DBus object during startup
+    # environment:
+    #   - SIGNAL_ACCOUNT=+15551234567

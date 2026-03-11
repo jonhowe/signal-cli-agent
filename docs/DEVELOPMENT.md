@@ -21,7 +21,7 @@ This separation is intentional and matches common production practices: **immuta
 
 ## Common Makefile flows (Docker)
 
-These targets are convenience wrappers around `docker compose -f docker/compose/docker-compose.yml …`.
+These targets are convenience wrappers around the repo-root [docker-compose.yml](/home/jhowe/git/signal-cli-agent/docker-compose.yml).
 
 ### Pull and run the published image
 
@@ -50,6 +50,8 @@ make docker-configure-build PHONE=+1XXXXXXXXXX
 make docker-link-build
 make docker-sync-build
 ```
+
+If you need machine-specific settings while developing, copy [docker-compose.override.yml.example](/home/jhowe/git/signal-cli-agent/docker-compose.override.yml.example) to `docker-compose.override.yml`. Compose merges it automatically and the local file is gitignored.
 
 ### Stop the stack
 
