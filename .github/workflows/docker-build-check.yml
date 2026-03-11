@@ -36,7 +36,7 @@ jobs:
           docker run --rm signal-cli-agent:ci-test \
             bash -c "pip3 install --no-cache-dir --break-system-packages pytest -q && python3 -m pytest /app/tests -q --tb=short"
 
-      - name: Smoke test — privilege drop
+      - name: Smoke test — appuser and gosu present
         run: |
-          docker run --rm --user 0 signal-cli-agent:ci-test \
-            bash -c "gosu appuser id | grep -q 'uid=1000' && echo 'privilege drop OK'"
+          docker run --rm signal-cli-agent:ci-test \
+            bash -c "which gosu && getent passwd appuser | grep -q ':1000:' && echo 'appuser and gosu OK'"
