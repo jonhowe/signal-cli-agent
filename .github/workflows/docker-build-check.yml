@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  build-and-test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -22,9 +22,21 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build (no push)
+      - name: Build image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile
           push: false
+          load: true
+          tags: signal-cli-agent:ci-test
+
+      - name: Run unit tests
+        run: |
+          docker run --rm signal-cli-agent:ci-test \
+            python3 -m pytest /app/tests -q --tb=short
+
+      - name: Smoke test — privilege drop
+        run: |
+          docker run --rm --user 0 signal-cli-agent:ci-test \
+            bash -c "gosu appuser id | grep -q 'uid=1000' && echo 'privilege drop OK'"
